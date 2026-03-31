@@ -1,8 +1,8 @@
 # 下一步
 
 ## 当前进度
-- 已完成：Sprint 1 (项目基础设施与首页), Sprint 2 (用户认证：手机号 + 验证码登录), Sprint 3 (素材上传与文件管理), Sprint 4 (AI 处理引擎)
-- 当前 Sprint：Sprint 4 已完成，准备进入 Sprint 5
+- 已完成：Sprint 1 (项目基础设施与首页), Sprint 2 (用户认证：手机号 + 验证码登录), Sprint 3 (素材上传与文件管理), Sprint 4 (AI 处理引擎), Sprint 5 (预览页：口误审核 + 字幕样式)
+- 当前 Sprint：Sprint 5 已完成，准备进入 Sprint 6
 
 ## 已完成的内容
 
@@ -26,26 +26,25 @@
 - 后端任务端点：POST /api/tasks、POST /api/tasks/{id}/files、PUT /api/tasks/{id}/files/reorder、DELETE /api/tasks/{id}/files/{file_id}、PUT /api/tasks/{id}/preferences、GET /api/tasks/{id}、GET /api/quota
 
 ### Sprint 4
-- 后端处理管线：
-  - Stage 0: FFmpeg 素材合并（单文件 copy / 多文件 concat demuxer）
-  - Stage 1: 语音识别（OpenAI Whisper API，无 key 则使用 mock 数据，输出 word-level 时间戳）
-  - Stage 2: 口误检测规则引擎（填充词检测、重复词检测、长停顿检测）
-  - Stage 3: 字幕生成（word segments 分组、SRT 文件输出）
-  - 后台线程执行，in-memory 进度追踪
-- 后端新端点：
-  - POST /api/tasks/{id}/process（触发处理）
-  - GET /api/tasks/{id}/status（返回 stage、progress、estimated_seconds、stages 数组）
-- 任务状态流转：uploading -> processing -> preview（或 failed）
-- 处理结果存入 task_results 表（transcribe、stutter、subtitle）
-- 失败重试支持（failed 状态可重新触发处理）
-- 前端处理中页 P04：
-  - /processing/{taskId} 页面，3 阶段进度显示（合并素材 -> 语音识别 -> 检测口误&生成字幕）
-  - ProgressSteps 组件：已完成绿色勾号、当前阶段旋转动画、未开始灰色圆点
-  - 每 2 秒轮询 GET /api/tasks/{id}/status 更新进度
-  - 处理完成自动跳转 /preview/{taskId}
-  - 超时检测（>15 分钟）+ 重试按钮
-  - 取消处理确认弹窗
-- 预览页占位页面（Sprint 5 完整实现）
+- 后端处理管线：FFmpeg 合并、Whisper 语音识别(mock)、口误检测规则引擎、字幕生成
+- 前端处理中页 P04：3 阶段进度显示、超时检测、取消处理
+- 后台线程处理、in-memory 进度追踪
+
+### Sprint 5
+- 后端预览 API：
+  - GET /api/tasks/{id}/preview：返回文字稿(words)、口误标记(stutter_marks)、字幕(subtitles)、统计信息
+  - PUT /api/tasks/{id}/preview：保存用户调整（口误标记切换、字幕样式）
+  - 动态统计：根据当前 mark actions 实时计算 deleted_count 和 deleted_duration_ms
+- 前端预览页 P05：
+  - TranscriptPanel：展示文字稿，口误标记红色背景 + 删除线，支持点击切换 delete/keep
+  - StutterWordMark：删除态（红色背景+删除线）、保留态（绿色左竖线+正常文字）
+  - PauseMark：长停顿标记（显示停顿时长，可切换删除/保留）
+  - SubtitleStylePanel：3 套预设样式（简洁白字/黑底白字/彩色高亮）+ 视觉预览
+  - SubtitlePreview：模拟视频画面上的字幕效果预览
+  - StutterStatsBar：实时统计"共检测到 N 处口误，预计缩短 M 秒"
+  - 底部操作栏："重新处理"（次要按钮）+ "确认，开始渲染"（主按钮）
+  - 移动端适配：文字稿区域和字幕设置纵向堆叠
+- 修复 Sprint 4 P2 问题：estimated_seconds 使用 ?? 替代 || 运算符
 
 ## 下一个具体任务
-Evaluator 应测试 Sprint 4 的验收标准
+Evaluator 应测试 Sprint 5 的验收标准

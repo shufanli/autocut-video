@@ -48,6 +48,11 @@ npm run dev
 - 查询状态: `curl http://localhost:8000/api/tasks/<task_id>/status -H "Authorization: Bearer <token>"`
 - 处理完成后任务 status 变为 "preview"，结果存在 task_results 表中
 
+## 预览页测试 (Sprint 5)
+- 获取预览数据: `curl http://localhost:8000/api/tasks/<task_id>/preview -H "Authorization: Bearer <token>"`
+- 更新口误标记和字幕样式: `curl -X PUT http://localhost:8000/api/tasks/<task_id>/preview -H "Authorization: Bearer <token>" -H "Content-Type: application/json" -d '{"stutter_updates":[{"index":0,"action":"keep"}],"subtitle_style":"black-bg"}'`
+- 预览页 URL: http://localhost:3000/preview/<task_id>
+
 ## 环境变量
 - `OPENAI_API_KEY`: 可选。设置后使用 OpenAI Whisper API 进行语音识别；未设置则使用 mock 数据。
 - 详见 `.env.example`
