@@ -19,7 +19,7 @@ export default function LoginPage() {
   // Redirect if already logged in
   useEffect(() => {
     if (user) {
-      router.replace("/");
+      router.replace("/upload");
     }
   }, [user, router]);
 
@@ -79,7 +79,7 @@ export default function LoginPage() {
       }
 
       login(data.token, data.user);
-      router.replace("/");
+      router.replace("/upload");
     } catch {
       setError("网络错误，请检查网络连接");
     } finally {
