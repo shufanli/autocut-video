@@ -169,7 +169,7 @@ export default function ProcessingPage() {
     status?.stage_key === "subtitle" || status?.stage_key === "stutter"
       ? "检测口误&生成字幕"
       : stageName;
-  const estimatedSeconds = status?.estimated_seconds || 120;
+  const estimatedSeconds = status?.estimated_seconds ?? 120;
   const isFailed = status?.status === "failed";
   const isComplete = status?.status === "preview";
 
