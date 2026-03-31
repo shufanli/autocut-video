@@ -51,7 +51,7 @@ export function ProgressSteps({
               {/* Stage name below circle */}
               <span
                 className={`
-                  mt-2 text-xs font-medium text-center whitespace-nowrap
+                  mt-2 text-xs font-medium text-center max-w-[80px] sm:max-w-none
                   ${
                     stage.status === "completed"
                       ? "text-success"
