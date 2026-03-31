@@ -301,11 +301,17 @@ def trigger_processing(
     if not task:
         raise HTTPException(status_code=404, detail="任务不存在")
 
-    if task.status != "uploading":
+    if task.status not in ("uploading", "failed"):
         raise HTTPException(
             status_code=400,
             detail=f"当前状态({task.status})不允许启动处理",
         )
+
+    # Reset status to uploading for retry
+    if task.status == "failed":
+        task.status = "uploading"
+        task.error_message = None
+        db.commit()
 
     # Check source files exist
     source_count = (

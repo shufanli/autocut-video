@@ -152,15 +152,23 @@ export default function ProcessingPage() {
   }, [router]);
 
   // Default stages for initial render
-  const defaultStages: StageInfo[] = [
+  // Backend has 4 stages but the acceptance criteria specifies 3 visual stages:
+  // "合并素材 -> 语音识别 -> 检测口误&生成字幕"
+  // So we merge stutter + subtitle into one visual stage.
+  const defaultDisplayStages: StageInfo[] = [
     { key: "merge", name: "合并素材", status: "active" },
     { key: "transcribe", name: "语音识别", status: "pending" },
-    { key: "stutter", name: "检测口误", status: "pending" },
-    { key: "subtitle", name: "生成字幕", status: "pending" },
+    { key: "stutter_subtitle", name: "检测口误&生成字幕", status: "pending" },
   ];
 
-  const stages = status?.stages || defaultStages;
+  // Transform 4 backend stages into 3 display stages
+  const stages = _mergeStages(status?.stages || null) || defaultDisplayStages;
   const stageName = status?.stage_name || "合并素材";
+  // If stage_key is "subtitle", display combined name
+  const displayStageName =
+    status?.stage_key === "subtitle" || status?.stage_key === "stutter"
+      ? "检测口误&生成字幕"
+      : stageName;
   const estimatedSeconds = status?.estimated_seconds || 120;
   const isFailed = status?.status === "failed";
   const isComplete = status?.status === "preview";
@@ -278,7 +286,7 @@ export default function ProcessingPage() {
               <>
                 <ProgressSteps
                   stages={stages}
-                  currentStageName={stageName}
+                  currentStageName={displayStageName}
                   estimatedSeconds={estimatedSeconds}
                 />
 
@@ -362,6 +370,53 @@ export default function ProcessingPage() {
       )}
     </AuthGuard>
   );
+}
+
+/**
+ * Merge 4 backend stages into 3 display stages.
+ * Combines "stutter" and "subtitle" into "检测口误&生成字幕".
+ */
+function _mergeStages(backendStages: StageInfo[] | null): StageInfo[] | null {
+  if (!backendStages || backendStages.length === 0) return null;
+
+  const merged: StageInfo[] = [];
+  for (const stage of backendStages) {
+    if (stage.key === "merge" || stage.key === "transcribe") {
+      merged.push(stage);
+    } else if (stage.key === "stutter") {
+      // Find subtitle stage
+      const subtitleStage = backendStages.find((s) => s.key === "subtitle");
+      // Determine combined status: if both completed -> completed
+      // If stutter is active or subtitle is active -> active
+      // Otherwise pending
+      let combinedStatus: "completed" | "active" | "pending" = "pending";
+      if (
+        stage.status === "completed" &&
+        subtitleStage?.status === "completed"
+      ) {
+        combinedStatus = "completed";
+      } else if (
+        stage.status === "active" ||
+        stage.status === "completed" ||
+        subtitleStage?.status === "active"
+      ) {
+        combinedStatus =
+          stage.status === "completed" && subtitleStage?.status !== "completed"
+            ? "active"
+            : stage.status === "active"
+            ? "active"
+            : "pending";
+      }
+      merged.push({
+        key: "stutter_subtitle",
+        name: "检测口误&生成字幕",
+        status: combinedStatus,
+      });
+    }
+    // Skip "subtitle" -- already merged above
+  }
+
+  return merged.length > 0 ? merged : null;
 }
 
 /**
