@@ -61,13 +61,25 @@ export default function ProcessingPage() {
       const data: TaskStatus = await res.json();
       setStatus(data);
 
-      // Check for completion -- redirect to preview
+      // Check for completion -- redirect to preview (only from initial processing)
       if (data.status === "preview") {
         if (pollRef.current) {
           clearInterval(pollRef.current);
           pollRef.current = null;
         }
         // Brief delay to show "complete" state before redirect
+        setTimeout(() => {
+          router.push(`/preview/${taskId}`);
+        }, 1500);
+        return;
+      }
+
+      // Rendering complete -- redirect to results/download page
+      if (data.status === "completed") {
+        if (pollRef.current) {
+          clearInterval(pollRef.current);
+          pollRef.current = null;
+        }
         setTimeout(() => {
           router.push(`/preview/${taskId}`);
         }, 1500);
@@ -171,7 +183,8 @@ export default function ProcessingPage() {
       : stageName;
   const estimatedSeconds = status?.estimated_seconds ?? 120;
   const isFailed = status?.status === "failed";
-  const isComplete = status?.status === "preview";
+  const isComplete = status?.status === "preview" || status?.status === "completed";
+  const isRendering = status?.status === "rendering";
 
   return (
     <AuthGuard>
@@ -186,11 +199,15 @@ export default function ProcessingPage() {
                 ? "处理失败"
                 : isComplete
                 ? "处理完成"
+                : isRendering
+                ? "正在渲染您的视频"
                 : "正在处理您的视频"}
             </h1>
             {!isTimedOut && !isFailed && !isComplete && (
               <p className="text-sm text-text-secondary mt-2">
-                AI 正在分析和处理您的视频，请耐心等待
+                {isRendering
+                  ? "正在根据您的编辑生成最终视频，请耐心等待"
+                  : "AI 正在分析和处理您的视频，请耐心等待"}
               </p>
             )}
           </div>

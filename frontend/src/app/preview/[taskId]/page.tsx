@@ -210,10 +210,30 @@ export default function PreviewPage() {
       return;
     }
 
-    // Navigate to rendering page (Sprint 6 will implement the actual rendering)
-    // For now, navigate to processing page as the rendering placeholder
+    // Trigger render: transition task status from "preview" to "rendering"
+    try {
+      const res = await fetch(`/api/tasks/${taskId}/render`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.detail || "启动渲染失败");
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "启动渲染失败";
+      showToast(message, "error");
+      setIsConfirming(false);
+      return;
+    }
+
+    // Navigate to processing page — task is now in "rendering" status
     router.push(`/processing/${taskId}`);
-  }, [saveAdjustments, router, taskId]);
+  }, [saveAdjustments, router, taskId, token, showToast]);
 
   // Reprocess: go back to upload page
   const handleReprocess = useCallback(() => {

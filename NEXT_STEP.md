@@ -47,4 +47,4 @@
 - 修复 Sprint 4 P2 问题：estimated_seconds 使用 ?? 替代 || 运算符
 
 ## 下一个具体任务
-Evaluator 应测试 Sprint 5 的验收标准
+Sprint 5 P1 bug 已修复（循环重定向问题）。Evaluator 应复测 Sprint 5 验收标准中的"确认，开始渲染"按钮跳转行为。通过后进入 Sprint 6。

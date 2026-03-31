@@ -411,6 +411,21 @@ def get_task_status(
             "error": "",
         })
 
+    elif task.status == "rendering":
+        # User confirmed edits, rendering in progress (Sprint 6 placeholder)
+        response.update({
+            "stage": 1,
+            "stage_name": "渲染中",
+            "stage_key": "rendering",
+            "progress": 50,
+            "estimated_seconds": 60,
+            "total_stages": 1,
+            "stages": [
+                {"key": "rendering", "name": "渲染中", "status": "active"},
+            ],
+            "error": "",
+        })
+
     elif task.status == "failed":
         response.update({
             "stage": -1,
@@ -573,3 +588,44 @@ def update_preview_data(
         db.commit()
 
     return {"success": True, "message": "预览数据已更新"}
+
+
+# ---------------------------------------------------------------------------
+# Render endpoint (Sprint 5 bug fix — transitions task from preview to rendering)
+# ---------------------------------------------------------------------------
+
+@router.post("/{task_id}/render")
+def start_render(
+    task_id: str,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Transition a task from 'preview' to 'rendering' status.
+
+    This endpoint is called when the user confirms their edits on the preview
+    page and clicks "确认，开始渲染". It changes the task status so that the
+    processing page does not redirect back to preview.
+
+    Full rendering logic will be implemented in Sprint 6. For now this only
+    performs the state transition.
+    """
+    task = db.query(Task).filter(Task.id == task_id, Task.user_id == user.id).first()
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+
+    if task.status != "preview":
+        raise HTTPException(
+            status_code=400,
+            detail=f"当前状态({task.status})不允许启动渲染",
+        )
+
+    task.status = "rendering"
+    db.commit()
+    logger.info(f"Task {task_id} status changed to rendering")
+
+    return {
+        "success": True,
+        "task_id": task_id,
+        "status": "rendering",
+        "message": "渲染已开始",
+    }
