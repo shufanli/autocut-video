@@ -39,6 +39,28 @@ python3 -m alembic upgrade head        # 执行迁移
 python3 -m alembic revision --autogenerate -m "描述"  # 生成新迁移
 ```
 
+## 认证测试（Sprint 1）
+
+MVP 固定验证码：**123456**
+
+```bash
+# 发送验证码
+curl -X POST http://localhost:8000/api/auth/send-code \
+  -H 'Content-Type: application/json' \
+  -d '{"phone":"13800138000"}'
+
+# 登录
+curl -X POST http://localhost:8000/api/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"phone":"13800138000","code":"123456"}'
+
+# 获取当前用户（用返回的 token）
+curl http://localhost:8000/api/auth/me \
+  -H 'Authorization: Bearer <token>'
+```
+
+前端登录页：http://localhost:3000/login
+
 ## 目录结构
 
 ```
