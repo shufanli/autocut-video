@@ -1,6 +1,6 @@
 # Dev Server
 
-## 启动方式
+## 本地开发
 
 ### 后端
 ```bash
@@ -29,6 +29,56 @@ npm run dev
 ## 健康检查
 - 后端直接: `curl http://localhost:8000/api/health`
 - 前端代理: `curl http://localhost:3000/api/health`
+
+---
+
+## 线上环境
+
+### 服务器信息
+- IP: 120.26.41.46
+- 域名: https://autocut.allinai.asia
+- SSH: `ssh -i ~/.ssh/Evan_mac_air_openclaw.pem root@120.26.41.46`
+
+### 部署目录
+```
+/www/wwwroot/autocut-video/
+  backend/       # FastAPI 后端 + Python venv
+  frontend/      # Next.js standalone build
+  logs/          # PM2 日志
+  ecosystem.config.js  # PM2 配置
+  start-backend.sh     # 后端启动脚本
+```
+
+### 进程管理 (PM2)
+```bash
+pm2 list                    # 查看所有进程
+pm2 logs                    # 实时日志
+pm2 restart all             # 重启所有
+pm2 restart autocut-backend # 重启后端
+pm2 restart autocut-frontend # 重启前端
+```
+
+### 一键部署（从本地）
+```bash
+cd deploy
+./deploy.sh
+```
+
+### Nginx 配置
+- 配置文件: `/etc/nginx/conf.d/autocut.conf`
+- 前端: Nginx -> :3000 (Next.js standalone)
+- 后端: Nginx -> :8000 (Uvicorn)
+- SSL: Let's Encrypt (自动续期)
+
+### SSL 证书
+- 证书路径: `/etc/letsencrypt/live/autocut.allinai.asia/`
+- 自动续期: cron `0 0 1 * * certbot renew --quiet`
+- 手动续期: `certbot renew`
+
+### 线上健康检查
+```bash
+curl https://autocut.allinai.asia/api/health
+```
 
 ## 认证测试
 - 发送验证码: `curl -X POST http://localhost:8000/api/auth/send-code -H "Content-Type: application/json" -d '{"phone":"13800138000"}'`
@@ -80,3 +130,4 @@ npm run dev
 - FFmpeg 如果未安装 libass（如 Homebrew 默认安装），字幕不会烧录到视频中，但会通过 WebVTT track 在播放器中显示
 - 渲染失败会自动重试 1 次
 - 完成的视频默认 24 小时后过期
+- 线上环境使用单 worker（因为验证码存在内存中，多 worker 会导致验证码丢失）
