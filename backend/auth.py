@@ -9,7 +9,7 @@ import time
 import random
 import logging
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Dict, List, Optional
 
 import jwt
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -30,13 +30,13 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 # ---------------------------------------------------------------------------
 
 # {phone: {code: str, expires_at: float, created_at: float}}
-_verification_codes: dict[str, dict] = {}
+_verification_codes: Dict[str, dict] = {}
 
 # {phone: {fail_count: int, locked_until: float}}
-_login_attempts: dict[str, dict] = {}
+_login_attempts: Dict[str, dict] = {}
 
 # {ip: [(timestamp, ...)]}
-_ip_sms_log: dict[str, list[float]] = {}
+_ip_sms_log: Dict[str, List[float]] = {}
 
 
 # ---------------------------------------------------------------------------
