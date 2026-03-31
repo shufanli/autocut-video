@@ -266,10 +266,25 @@ export default function UploadPage() {
         body: JSON.stringify({ preferences }),
       });
 
-      // Navigate to processing page (will be built in Sprint 4)
+      // Trigger backend processing pipeline
+      const processRes = await fetch(`/api/tasks/${taskId}/process`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+      });
+
+      if (!processRes.ok) {
+        const errData = await processRes.json().catch(() => ({}));
+        throw new Error(errData.detail || "启动处理失败");
+      }
+
+      // Navigate to processing page
       router.push(`/processing/${taskId}`);
-    } catch {
-      showToast("启动处理失败，请重试", "error");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "启动处理失败，请重试";
+      showToast(message, "error");
       setIsProcessing(false);
     }
   }, [taskId, token, files.length, preferences, router, showToast]);

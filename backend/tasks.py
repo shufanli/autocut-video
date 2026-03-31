@@ -15,7 +15,8 @@ from sqlalchemy.orm import Session
 from config import settings
 from database import get_db
 from auth import get_current_user
-from models import User, Task, TaskFile
+from models import User, Task, TaskFile, TaskResult
+from services.pipeline import start_processing, get_task_progress
 
 logger = logging.getLogger("autocut.tasks")
 
@@ -279,3 +280,141 @@ def list_tasks(user: User = Depends(get_current_user), db: Session = Depends(get
     """List all tasks for the current user."""
     tasks = db.query(Task).filter(Task.user_id == user.id).order_by(Task.created_at.desc()).all()
     return [_task_to_response(t) for t in tasks]
+
+
+# ---------------------------------------------------------------------------
+# Processing endpoints (Sprint 4)
+# ---------------------------------------------------------------------------
+
+@router.post("/{task_id}/process")
+def trigger_processing(
+    task_id: str,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Start AI processing pipeline for a task.
+
+    The task must be in 'uploading' status with at least one source file.
+    Processing runs in a background thread.
+    """
+    task = db.query(Task).filter(Task.id == task_id, Task.user_id == user.id).first()
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+
+    if task.status != "uploading":
+        raise HTTPException(
+            status_code=400,
+            detail=f"当前状态({task.status})不允许启动处理",
+        )
+
+    # Check source files exist
+    source_count = (
+        db.query(TaskFile)
+        .filter(TaskFile.task_id == task_id, TaskFile.file_type == "source")
+        .count()
+    )
+    if source_count == 0:
+        raise HTTPException(status_code=400, detail="请先上传视频文件")
+
+    try:
+        start_processing(task_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to start processing: {e}")
+        raise HTTPException(status_code=500, detail="启动处理失败，请稍后重试")
+
+    return {
+        "success": True,
+        "task_id": task_id,
+        "status": "processing",
+        "message": "处理已开始",
+    }
+
+
+@router.get("/{task_id}/status")
+def get_task_status(
+    task_id: str,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Get the current processing status and progress for a task.
+
+    Returns stage info, progress percentage, and estimated remaining time.
+    """
+    task = db.query(Task).filter(Task.id == task_id, Task.user_id == user.id).first()
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+
+    # Base response
+    response = {
+        "task_id": task_id,
+        "status": task.status,
+        "created_at": task.created_at.isoformat() if task.created_at else "",
+        "error_message": task.error_message,
+    }
+
+    # If processing, add real-time progress from in-memory tracker
+    if task.status == "processing":
+        progress = get_task_progress(task_id)
+        if progress:
+            response.update({
+                "stage": progress["stage"],
+                "stage_name": progress["stage_name"],
+                "stage_key": progress["stage_key"],
+                "progress": progress["progress"],
+                "estimated_seconds": progress["estimated_seconds"],
+                "total_stages": progress["total_stages"],
+                "stages": progress["stages"],
+                "error": progress.get("error", ""),
+            })
+        else:
+            # No progress data yet -- just started
+            response.update({
+                "stage": 0,
+                "stage_name": "合并素材",
+                "stage_key": "merge",
+                "progress": 0,
+                "estimated_seconds": 120,
+                "total_stages": 4,
+                "stages": [
+                    {"key": "merge", "name": "合并素材", "status": "active"},
+                    {"key": "transcribe", "name": "语音识别", "status": "pending"},
+                    {"key": "stutter", "name": "检测口误", "status": "pending"},
+                    {"key": "subtitle", "name": "生成字幕", "status": "pending"},
+                ],
+                "error": "",
+            })
+
+    elif task.status == "preview":
+        # Processing complete, all stages done
+        progress = get_task_progress(task_id)
+        response.update({
+            "stage": 4,
+            "stage_name": "完成",
+            "stage_key": "done",
+            "progress": 100,
+            "estimated_seconds": 0,
+            "total_stages": 4,
+            "stages": [
+                {"key": "merge", "name": "合并素材", "status": "completed"},
+                {"key": "transcribe", "name": "语音识别", "status": "completed"},
+                {"key": "stutter", "name": "检测口误", "status": "completed"},
+                {"key": "subtitle", "name": "生成字幕", "status": "completed"},
+            ],
+            "error": "",
+        })
+
+    elif task.status == "failed":
+        response.update({
+            "stage": -1,
+            "stage_name": "失败",
+            "stage_key": "failed",
+            "progress": 0,
+            "estimated_seconds": 0,
+            "total_stages": 4,
+            "stages": [],
+            "error": task.error_message or "处理失败",
+        })
+
+    return response

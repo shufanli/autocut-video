@@ -1,0 +1,386 @@
+"use client";
+
+import { useState, useEffect, useCallback, useRef } from "react";
+import { useRouter, useParams } from "next/navigation";
+import { Loader2, XCircle, RotateCcw, ArrowLeft } from "lucide-react";
+import { AuthGuard } from "@/components/auth-guard";
+import { ProgressSteps, StageInfo } from "@/components/progress-steps";
+import { useAuth } from "@/lib/auth-context";
+import { useToast } from "@/components/toast";
+
+const POLL_INTERVAL_MS = 2000; // Poll every 2 seconds
+const TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes
+
+interface TaskStatus {
+  task_id: string;
+  status: string;
+  stage: number;
+  stage_name: string;
+  stage_key: string;
+  progress: number;
+  estimated_seconds: number;
+  total_stages: number;
+  stages: StageInfo[];
+  error: string;
+  error_message: string | null;
+}
+
+export default function ProcessingPage() {
+  const router = useRouter();
+  const params = useParams();
+  const taskId = params.taskId as string;
+  const { token } = useAuth();
+  const { showToast } = useToast();
+
+  const [status, setStatus] = useState<TaskStatus | null>(null);
+  const [isTimedOut, setIsTimedOut] = useState(false);
+  const [showCancelConfirm, setShowCancelConfirm] = useState(false);
+  const [isRetrying, setIsRetrying] = useState(false);
+
+  const startTimeRef = useRef<number>(Date.now());
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Poll for status updates
+  const fetchStatus = useCallback(async () => {
+    if (!token || !taskId) return;
+
+    try {
+      const res = await fetch(`/api/tasks/${taskId}/status`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      if (!res.ok) {
+        if (res.status === 404) {
+          showToast("任务不存在", "error");
+          router.push("/upload");
+          return;
+        }
+        return;
+      }
+
+      const data: TaskStatus = await res.json();
+      setStatus(data);
+
+      // Check for completion -- redirect to preview
+      if (data.status === "preview") {
+        if (pollRef.current) {
+          clearInterval(pollRef.current);
+          pollRef.current = null;
+        }
+        // Brief delay to show "complete" state before redirect
+        setTimeout(() => {
+          router.push(`/preview/${taskId}`);
+        }, 1500);
+        return;
+      }
+
+      // Check for failure
+      if (data.status === "failed") {
+        if (pollRef.current) {
+          clearInterval(pollRef.current);
+          pollRef.current = null;
+        }
+        return;
+      }
+
+      // Check timeout
+      if (Date.now() - startTimeRef.current > TIMEOUT_MS) {
+        setIsTimedOut(true);
+        if (pollRef.current) {
+          clearInterval(pollRef.current);
+          pollRef.current = null;
+        }
+        return;
+      }
+    } catch {
+      // Network error -- keep polling
+    }
+  }, [token, taskId, router, showToast]);
+
+  // Start polling on mount
+  useEffect(() => {
+    fetchStatus(); // Initial fetch
+    pollRef.current = setInterval(fetchStatus, POLL_INTERVAL_MS);
+
+    return () => {
+      if (pollRef.current) {
+        clearInterval(pollRef.current);
+      }
+    };
+  }, [fetchStatus]);
+
+  // Handle retry
+  const handleRetry = useCallback(async () => {
+    if (!token || !taskId) return;
+    setIsRetrying(true);
+    setIsTimedOut(false);
+
+    try {
+      const res = await fetch(`/api/tasks/${taskId}/process`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+      });
+
+      if (res.ok) {
+        startTimeRef.current = Date.now();
+        setStatus(null);
+        // Restart polling
+        if (pollRef.current) clearInterval(pollRef.current);
+        pollRef.current = setInterval(fetchStatus, POLL_INTERVAL_MS);
+        showToast("已重新开始处理", "success");
+      } else {
+        const data = await res.json().catch(() => ({}));
+        showToast(data.detail || "重试失败", "error");
+      }
+    } catch {
+      showToast("网络错误，请稍后重试", "error");
+    } finally {
+      setIsRetrying(false);
+    }
+  }, [token, taskId, fetchStatus, showToast]);
+
+  // Handle cancel
+  const handleCancelConfirm = useCallback(() => {
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+    router.push("/upload");
+  }, [router]);
+
+  // Default stages for initial render
+  const defaultStages: StageInfo[] = [
+    { key: "merge", name: "合并素材", status: "active" },
+    { key: "transcribe", name: "语音识别", status: "pending" },
+    { key: "stutter", name: "检测口误", status: "pending" },
+    { key: "subtitle", name: "生成字幕", status: "pending" },
+  ];
+
+  const stages = status?.stages || defaultStages;
+  const stageName = status?.stage_name || "合并素材";
+  const estimatedSeconds = status?.estimated_seconds || 120;
+  const isFailed = status?.status === "failed";
+  const isComplete = status?.status === "preview";
+
+  return (
+    <AuthGuard>
+      <div className="min-h-[calc(100vh-64px)] px-4 sm:px-6 lg:px-8 py-6 lg:py-10">
+        <div className="max-w-2xl mx-auto">
+          {/* Page header */}
+          <div className="mb-8 text-center">
+            <h1 className="text-2xl font-bold text-text-primary">
+              {isTimedOut
+                ? "处理超时"
+                : isFailed
+                ? "处理失败"
+                : isComplete
+                ? "处理完成"
+                : "正在处理您的视频"}
+            </h1>
+            {!isTimedOut && !isFailed && !isComplete && (
+              <p className="text-sm text-text-secondary mt-2">
+                AI 正在分析和处理您的视频，请耐心等待
+              </p>
+            )}
+          </div>
+
+          {/* Progress card */}
+          <div className="bg-white border border-border rounded-lg p-6 sm:p-8 shadow-sm">
+            {/* Timeout state */}
+            {isTimedOut && (
+              <div className="text-center py-8">
+                <XCircle className="w-16 h-16 text-warning mx-auto mb-4" />
+                <p className="text-lg font-semibold text-text-primary mb-2">
+                  处理超时
+                </p>
+                <p className="text-sm text-text-secondary mb-6">
+                  处理时间超过 15 分钟，请重试
+                </p>
+                <button
+                  onClick={handleRetry}
+                  disabled={isRetrying}
+                  className="
+                    px-6 py-3 rounded-md text-sm font-medium
+                    bg-primary text-white hover:bg-primary-hover
+                    transition-colors duration-150
+                    disabled:opacity-50 disabled:cursor-not-allowed
+                    flex items-center gap-2 mx-auto
+                  "
+                >
+                  {isRetrying ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      重试中...
+                    </>
+                  ) : (
+                    <>
+                      <RotateCcw className="w-4 h-4" />
+                      重试
+                    </>
+                  )}
+                </button>
+              </div>
+            )}
+
+            {/* Failed state */}
+            {isFailed && !isTimedOut && (
+              <div className="text-center py-8">
+                <XCircle className="w-16 h-16 text-danger mx-auto mb-4" />
+                <p className="text-lg font-semibold text-text-primary mb-2">
+                  处理失败
+                </p>
+                <p className="text-sm text-text-secondary mb-6">
+                  {status?.error_message || status?.error || "处理过程中出现错误，请重试"}
+                </p>
+                <div className="flex items-center justify-center gap-4">
+                  <button
+                    onClick={() => router.push("/upload")}
+                    className="
+                      px-6 py-3 rounded-md text-sm font-medium
+                      border border-border text-gray-700
+                      hover:bg-surface transition-colors duration-150
+                    "
+                  >
+                    返回上传页
+                  </button>
+                  <button
+                    onClick={handleRetry}
+                    disabled={isRetrying}
+                    className="
+                      px-6 py-3 rounded-md text-sm font-medium
+                      bg-primary text-white hover:bg-primary-hover
+                      transition-colors duration-150
+                      disabled:opacity-50 disabled:cursor-not-allowed
+                      flex items-center gap-2
+                    "
+                  >
+                    {isRetrying ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        重试中...
+                      </>
+                    ) : (
+                      <>
+                        <RotateCcw className="w-4 h-4" />
+                        重试
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Normal processing state (or complete) */}
+            {!isTimedOut && !isFailed && (
+              <>
+                <ProgressSteps
+                  stages={stages}
+                  currentStageName={stageName}
+                  estimatedSeconds={estimatedSeconds}
+                />
+
+                {/* Processing animation */}
+                {!isComplete && (
+                  <div className="mt-8 flex justify-center">
+                    <div className="w-full max-w-md">
+                      {/* Overall progress bar */}
+                      <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-primary rounded-full transition-all duration-500 ease-out"
+                          style={{
+                            width: `${_computeOverallProgress(stages, status?.progress || 0)}%`,
+                          }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Cancel button */}
+                {!isComplete && (
+                  <div className="mt-8 text-center">
+                    <button
+                      onClick={() => setShowCancelConfirm(true)}
+                      className="
+                        text-sm text-text-secondary hover:text-text-primary
+                        transition-colors duration-150
+                      "
+                    >
+                      取消处理
+                    </button>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Cancel confirmation modal */}
+      {showCancelConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          {/* Backdrop */}
+          <div
+            className="absolute inset-0 bg-black/50"
+            onClick={() => setShowCancelConfirm(false)}
+          />
+          {/* Dialog */}
+          <div className="relative bg-white rounded-lg shadow-lg max-w-sm w-full mx-4 p-6">
+            <h3 className="text-lg font-semibold text-text-primary mb-2">
+              确认取消处理？
+            </h3>
+            <p className="text-sm text-text-secondary mb-6">
+              取消后处理进度将丢失，您需要重新开始处理。
+            </p>
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setShowCancelConfirm(false)}
+                className="
+                  px-4 py-2 rounded-md text-sm font-medium
+                  border border-border text-gray-700
+                  hover:bg-surface transition-colors duration-150
+                "
+              >
+                继续处理
+              </button>
+              <button
+                onClick={handleCancelConfirm}
+                className="
+                  px-4 py-2 rounded-md text-sm font-medium
+                  bg-danger text-white hover:bg-red-700
+                  transition-colors duration-150
+                "
+              >
+                确认取消
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </AuthGuard>
+  );
+}
+
+/**
+ * Compute overall progress percentage across all stages.
+ * Each stage has equal weight. Completed stages = 100%, active = current progress.
+ */
+function _computeOverallProgress(stages: StageInfo[], stageProgress: number): number {
+  if (!stages || stages.length === 0) return 0;
+  const totalStages = stages.length;
+  const completedCount = stages.filter((s) => s.status === "completed").length;
+  const activeStage = stages.find((s) => s.status === "active");
+
+  let overall = (completedCount / totalStages) * 100;
+  if (activeStage) {
+    overall += (stageProgress / 100 / totalStages) * 100;
+  }
+
+  // If all completed
+  if (completedCount === totalStages) return 100;
+
+  return Math.min(Math.round(overall), 99); // Never show 100 until truly done
+}
