@@ -1,8 +1,8 @@
 # 下一步
 
 ## 当前进度
-- 已完成：Sprint 1 (项目基础设施与首页), Sprint 2 (用户认证：手机号 + 验证码登录), Sprint 3 (素材上传与文件管理)
-- 当前 Sprint：Sprint 3 已完成，准备进入 Sprint 4
+- 已完成：Sprint 1 (项目基础设施与首页), Sprint 2 (用户认证：手机号 + 验证码登录), Sprint 3 (素材上传与文件管理), Sprint 4 (AI 处理引擎)
+- 当前 Sprint：Sprint 4 已完成，准备进入 Sprint 5
 
 ## 已完成的内容
 
@@ -22,24 +22,30 @@
 - 导航栏用户状态切换：未登录显示"登录"按钮，已登录显示用户头像 + 下拉菜单
 
 ### Sprint 3
-- 上传页 P03 完整实现：
-  - UploadZone 组件：拖拽上传区（虚线边框）+ 点击上传，支持多文件
-  - FileList 组件：文件列表显示文件名、大小、上传进度条、绿色勾号，dnd-kit 拖拽排序，删除按钮
-  - PreferencePanel 组件："让 AI 自动决定"标签（绿色勾号），可展开"高级设置"（字幕样式 3 套 + 字幕位置选择）
-  - 文件格式校验：客户端 + 服务端双层验证，非视频文件显示 toast 提示
-  - 上传进度条：XMLHttpRequest 实现逐文件进度追踪
-  - "开始处理"按钮：有文件时可点击，无文件时灰色禁用
-  - 底部显示"您还有 N 条免费额度"
-  - 移动端响应式：上传区和偏好设置纵向堆叠
-- 后端任务端点：
-  - POST /api/tasks（创建任务）
-  - POST /api/tasks/{id}/files（上传文件，multipart）
-  - PUT /api/tasks/{id}/files/reorder（文件排序）
-  - DELETE /api/tasks/{id}/files/{file_id}（删除文件）
-  - PUT /api/tasks/{id}/preferences（更新偏好设置）
-  - GET /api/tasks/{id}（获取任务详情含文件列表）
-  - GET /api/quota（获取用户免费额度）
-  - 文件存储：本地磁盘 UPLOAD_DIR/<task_id>/
+- 上传页 P03 完整实现：UploadZone、FileList、PreferencePanel 组件
+- 后端任务端点：POST /api/tasks、POST /api/tasks/{id}/files、PUT /api/tasks/{id}/files/reorder、DELETE /api/tasks/{id}/files/{file_id}、PUT /api/tasks/{id}/preferences、GET /api/tasks/{id}、GET /api/quota
+
+### Sprint 4
+- 后端处理管线：
+  - Stage 0: FFmpeg 素材合并（单文件 copy / 多文件 concat demuxer）
+  - Stage 1: 语音识别（OpenAI Whisper API，无 key 则使用 mock 数据，输出 word-level 时间戳）
+  - Stage 2: 口误检测规则引擎（填充词检测、重复词检测、长停顿检测）
+  - Stage 3: 字幕生成（word segments 分组、SRT 文件输出）
+  - 后台线程执行，in-memory 进度追踪
+- 后端新端点：
+  - POST /api/tasks/{id}/process（触发处理）
+  - GET /api/tasks/{id}/status（返回 stage、progress、estimated_seconds、stages 数组）
+- 任务状态流转：uploading -> processing -> preview（或 failed）
+- 处理结果存入 task_results 表（transcribe、stutter、subtitle）
+- 失败重试支持（failed 状态可重新触发处理）
+- 前端处理中页 P04：
+  - /processing/{taskId} 页面，3 阶段进度显示（合并素材 -> 语音识别 -> 检测口误&生成字幕）
+  - ProgressSteps 组件：已完成绿色勾号、当前阶段旋转动画、未开始灰色圆点
+  - 每 2 秒轮询 GET /api/tasks/{id}/status 更新进度
+  - 处理完成自动跳转 /preview/{taskId}
+  - 超时检测（>15 分钟）+ 重试按钮
+  - 取消处理确认弹窗
+- 预览页占位页面（Sprint 5 完整实现）
 
 ## 下一个具体任务
-Evaluator 应测试 Sprint 3 的验收标准
+Evaluator 应测试 Sprint 4 的验收标准

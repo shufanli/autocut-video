@@ -14,6 +14,11 @@ cd frontend
 npm run dev
 ```
 
+## 依赖
+- Backend: `pip install -r backend/requirements.txt`
+- Frontend: `cd frontend && npm install`
+- FFmpeg: 必须安装 (`brew install ffmpeg` on macOS)
+
 ## 端口
 - Frontend: 3000
 - Backend: 8000
@@ -37,3 +42,12 @@ npm run dev
 - 删除文件: `curl -X DELETE http://localhost:8000/api/tasks/<task_id>/files/<file_id> -H "Authorization: Bearer <token>"`
 - 排序文件: `curl -X PUT http://localhost:8000/api/tasks/<task_id>/files/reorder -H "Authorization: Bearer <token>" -H "Content-Type: application/json" -d '{"file_ids":["id1","id2"]}'`
 - 获取额度: `curl http://localhost:8000/api/quota -H "Authorization: Bearer <token>"`
+
+## 处理管线测试 (Sprint 4)
+- 触发处理: `curl -X POST http://localhost:8000/api/tasks/<task_id>/process -H "Authorization: Bearer <token>"`
+- 查询状态: `curl http://localhost:8000/api/tasks/<task_id>/status -H "Authorization: Bearer <token>"`
+- 处理完成后任务 status 变为 "preview"，结果存在 task_results 表中
+
+## 环境变量
+- `OPENAI_API_KEY`: 可选。设置后使用 OpenAI Whisper API 进行语音识别；未设置则使用 mock 数据。
+- 详见 `.env.example`
