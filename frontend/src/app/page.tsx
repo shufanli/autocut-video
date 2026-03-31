@@ -2,51 +2,32 @@
 
 import Link from "next/link";
 import { useAuth } from "@/lib/auth-context";
+import { Scissors, Captions, CheckCircle, Download } from "lucide-react";
 
 const features = [
   {
-    icon: (
-      <svg className="w-8 h-8" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <rect width="32" height="32" rx="8" className="fill-blue-100" />
-        <path d="M10 11h12M10 16h8M10 21h10" stroke="#2563EB" strokeWidth="2" strokeLinecap="round" />
-      </svg>
-    ),
+    icon: <Scissors className="w-6 h-6 text-primary" />,
+    bgColor: "bg-blue-50",
     title: "智能去口误",
     desc: "AI 自动识别重复词、填充词（嗯、啊、那个）和长停顿，一键清理",
   },
   {
-    icon: (
-      <svg className="w-8 h-8" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <rect width="32" height="32" rx="8" className="fill-green-100" />
-        <rect x="6" y="18" width="20" height="6" rx="2" stroke="#16A34A" strokeWidth="2" />
-        <path d="M10 22h12" stroke="#16A34A" strokeWidth="2" strokeLinecap="round" />
-      </svg>
-    ),
-    title: "自动字幕",
+    icon: <Captions className="w-6 h-6 text-success" />,
+    bgColor: "bg-green-50",
+    title: "自动加字幕",
     desc: "语音识别生成精准字幕，多种样式一键切换，无需手动对时间轴",
   },
   {
-    icon: (
-      <svg className="w-8 h-8" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <rect width="32" height="32" rx="8" className="fill-amber-100" />
-        <path d="M8 12h6v8H8zM18 12h6v8h-6z" stroke="#F59E0B" strokeWidth="2" strokeLinejoin="round" />
-        <path d="M14 16h4" stroke="#F59E0B" strokeWidth="2" strokeLinecap="round" />
-      </svg>
-    ),
-    title: "多段合并",
-    desc: "多条素材按顺序合并，拖拽排序，告别繁琐的时间线操作",
-  },
-  {
-    icon: (
-      <svg className="w-8 h-8" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <rect width="32" height="32" rx="8" className="fill-red-100" />
-        <path d="M16 8v6M11 11l3.5 3.5M21 11l-3.5 3.5" stroke="#DC2626" strokeWidth="2" strokeLinecap="round" />
-        <path d="M9 18h14" stroke="#DC2626" strokeWidth="2" strokeLinecap="round" />
-        <path d="M10 21h2M14 21h4M20 21h2" stroke="#DC2626" strokeWidth="2" strokeLinecap="round" />
-      </svg>
-    ),
+    icon: <CheckCircle className="w-6 h-6 text-[#F59E0B]" />,
+    bgColor: "bg-amber-50",
     title: "逐条可审核",
     desc: "AI 的每一处修改都清晰标注，你可以逐条确认或恢复，100% 掌控成品",
+  },
+  {
+    icon: <Download className="w-6 h-6 text-[#DC2626]" />,
+    bgColor: "bg-red-50",
+    title: "一键出片",
+    desc: "去口误、加字幕、合并素材一步到位，几分钟输出可直接发布的成品",
   },
 ];
 
@@ -86,17 +67,19 @@ export default function Home() {
 
       {/* Features Section */}
       <section className="pb-16 sm:pb-20 px-4">
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6 max-w-content mx-auto">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-6 max-w-content mx-auto">
           {features.map((f) => (
             <div
               key={f.title}
-              className="bg-white rounded-xl shadow-sm border border-gray-100 p-6 hover:shadow-md transition-shadow"
+              className="bg-white rounded-lg border border-border p-4 sm:p-6 hover:shadow-md transition-shadow duration-200"
             >
-              <div className="mb-4">{f.icon}</div>
-              <h3 className="text-base sm:text-lg font-semibold text-text-primary mb-2">
+              <div className={`w-12 h-12 rounded-lg ${f.bgColor} flex items-center justify-center mb-3 sm:mb-4`}>
+                {f.icon}
+              </div>
+              <h3 className="text-sm sm:text-lg font-semibold text-text-primary mb-1 sm:mb-2">
                 {f.title}
               </h3>
-              <p className="text-sm sm:text-[15px] leading-relaxed text-text-secondary">
+              <p className="text-xs sm:text-sm leading-relaxed text-text-secondary">
                 {f.desc}
               </p>
             </div>
