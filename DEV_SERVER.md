@@ -24,3 +24,8 @@ npm run dev
 ## 健康检查
 - 后端直接: `curl http://localhost:8000/api/health`
 - 前端代理: `curl http://localhost:3000/api/health`
+
+## 认证测试
+- 发送验证码: `curl -X POST http://localhost:8000/api/auth/send-code -H "Content-Type: application/json" -d '{"phone":"13800138000"}'`
+- 登录 (mock 验证码 123456): `curl -X POST http://localhost:8000/api/auth/login -H "Content-Type: application/json" -d '{"phone":"13800138000","code":"123456"}'`
+- 获取当前用户: `curl http://localhost:8000/api/auth/me -H "Authorization: Bearer <token>"`
