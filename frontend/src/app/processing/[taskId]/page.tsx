@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useRouter, useParams } from "next/navigation";
-import { Loader2, XCircle, RotateCcw, ArrowLeft } from "lucide-react";
+import { Loader2, XCircle, RotateCcw } from "lucide-react";
 import { AuthGuard } from "@/components/auth-guard";
 import { ProgressSteps, StageInfo } from "@/components/progress-steps";
 import { useAuth } from "@/lib/auth-context";

@@ -424,3 +424,152 @@ def get_task_status(
         })
 
     return response
+
+
+# ---------------------------------------------------------------------------
+# Preview endpoints (Sprint 5)
+# ---------------------------------------------------------------------------
+
+class PreviewStutterUpdate(BaseModel):
+    """A single stutter mark with updated action (delete/keep)."""
+    index: int
+    action: str  # "delete" or "keep"
+
+
+class PreviewUpdateRequest(BaseModel):
+    """Body for PUT /api/tasks/{id}/preview."""
+    stutter_updates: List[PreviewStutterUpdate] = []
+    subtitle_style: Optional[str] = None  # "clean-white", "black-bg", "colorful"
+
+
+@router.get("/{task_id}/preview")
+def get_preview_data(
+    task_id: str,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Get preview data for a task: transcript words, stutter marks, subtitles.
+
+    The task must be in 'preview' (or later) status, meaning processing is done.
+    Returns the full transcript, stutter marks with their current action states,
+    subtitle entries, and summary statistics.
+    """
+    task = db.query(Task).filter(Task.id == task_id, Task.user_id == user.id).first()
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+
+    if task.status not in ("preview", "rendering", "completed"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"任务尚未处理完成(当前状态: {task.status})",
+        )
+
+    # Load results from task_results table
+    results = {
+        r.agent_name: r.result_json
+        for r in db.query(TaskResult).filter(TaskResult.task_id == task_id).all()
+    }
+
+    transcribe_data = results.get("transcribe", {})
+    stutter_data = results.get("stutter", {})
+    subtitle_data = results.get("subtitle", {})
+
+    words = transcribe_data.get("words", [])
+    marks = stutter_data.get("marks", [])
+    stats = stutter_data.get("stats", {})
+    subtitles = subtitle_data.get("subtitles", [])
+
+    # Compute dynamic stats based on current mark actions
+    deleted_count = sum(1 for m in marks if m.get("action") == "delete")
+    deleted_duration_ms = sum(
+        m.get("duration_ms", 0) for m in marks if m.get("action") == "delete"
+    )
+
+    # Get subtitle style from task preferences (default: clean-white)
+    preferences = task.preferences or {}
+    subtitle_style = preferences.get("subtitleStyle", "clean-white")
+
+    return {
+        "task_id": task_id,
+        "status": task.status,
+        "words": words,
+        "stutter_marks": marks,
+        "stutter_stats": {
+            "total_marks": len(marks),
+            "deleted_count": deleted_count,
+            "deleted_duration_ms": deleted_duration_ms,
+            "filler_count": stats.get("filler_count", 0),
+            "repeat_count": stats.get("repeat_count", 0),
+            "pause_count": stats.get("pause_count", 0),
+        },
+        "subtitles": subtitles,
+        "subtitle_style": subtitle_style,
+    }
+
+
+@router.put("/{task_id}/preview")
+def update_preview_data(
+    task_id: str,
+    body: PreviewUpdateRequest,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Save user adjustments to stutter marks and subtitle style.
+
+    Accepts a list of stutter mark index + action updates and optional
+    subtitle style change. Persists changes back to task_results and
+    task preferences.
+    """
+    task = db.query(Task).filter(Task.id == task_id, Task.user_id == user.id).first()
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+
+    if task.status not in ("preview",):
+        raise HTTPException(
+            status_code=400,
+            detail=f"当前状态({task.status})不允许修改预览数据",
+        )
+
+    # Update stutter marks if provided
+    if body.stutter_updates:
+        stutter_result = (
+            db.query(TaskResult)
+            .filter(TaskResult.task_id == task_id, TaskResult.agent_name == "stutter")
+            .first()
+        )
+        if stutter_result and stutter_result.result_json:
+            marks = stutter_result.result_json.get("marks", [])
+            # Build index map for quick lookup
+            update_map = {u.index: u.action for u in body.stutter_updates}
+            for i, mark in enumerate(marks):
+                if i in update_map:
+                    mark["action"] = update_map[i]
+
+            # Recompute stats
+            deleted_count = sum(1 for m in marks if m.get("action") == "delete")
+            deleted_duration_ms = sum(
+                m.get("duration_ms", 0) for m in marks if m.get("action") == "delete"
+            )
+            stutter_result.result_json = {
+                "marks": marks,
+                "stats": {
+                    **stutter_result.result_json.get("stats", {}),
+                    "deleted_count": deleted_count,
+                    "total_duration_ms": deleted_duration_ms,
+                },
+            }
+            # Force SQLAlchemy to detect JSON mutation
+            from sqlalchemy.orm.attributes import flag_modified
+            flag_modified(stutter_result, "result_json")
+            db.commit()
+
+    # Update subtitle style if provided
+    if body.subtitle_style:
+        preferences = task.preferences or {}
+        preferences["subtitleStyle"] = body.subtitle_style
+        task.preferences = preferences
+        from sqlalchemy.orm.attributes import flag_modified
+        flag_modified(task, "preferences")
+        db.commit()
+
+    return {"success": True, "message": "预览数据已更新"}
