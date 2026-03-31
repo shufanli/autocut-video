@@ -53,6 +53,21 @@ npm run dev
 - 更新口误标记和字幕样式: `curl -X PUT http://localhost:8000/api/tasks/<task_id>/preview -H "Authorization: Bearer <token>" -H "Content-Type: application/json" -d '{"stutter_updates":[{"index":0,"action":"keep"}],"subtitle_style":"black-bg"}'`
 - 预览页 URL: http://localhost:3000/preview/<task_id>
 
+## 渲染与完成页测试 (Sprint 6)
+- 启动渲染: `curl -X POST http://localhost:8000/api/tasks/<task_id>/render -H "Authorization: Bearer <token>"`
+- 查询渲染进度: `curl http://localhost:8000/api/tasks/<task_id>/render-status -H "Authorization: Bearer <token>"`
+- 获取结果信息: `curl http://localhost:8000/api/tasks/<task_id>/result -H "Authorization: Bearer <token>"`
+- 下载视频: `curl -o output.mp4 http://localhost:8000/api/tasks/<task_id>/download -H "Authorization: Bearer <token>"`
+- 播放视频流: `curl http://localhost:8000/api/tasks/<task_id>/stream -H "Authorization: Bearer <token>"`
+- 获取 VTT 字幕: `curl http://localhost:8000/api/tasks/<task_id>/subtitles.vtt -H "Authorization: Bearer <token>"`
+- 提交满意度反馈: `curl -X POST http://localhost:8000/api/tasks/<task_id>/feedback -H "Authorization: Bearer <token>" -H "Content-Type: application/json" -d '{"rating":"up"}'`
+- 完成页 URL: http://localhost:3000/result/<task_id>
+
 ## 环境变量
 - `OPENAI_API_KEY`: 可选。设置后使用 OpenAI Whisper API 进行语音识别；未设置则使用 mock 数据。
 - 详见 `.env.example`
+
+## 注意事项
+- FFmpeg 如果未安装 libass（如 Homebrew 默认安装），字幕不会烧录到视频中，但会通过 WebVTT track 在播放器中显示
+- 渲染失败会自动重试 1 次
+- 完成的视频默认 24 小时后过期

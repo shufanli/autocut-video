@@ -1,50 +1,45 @@
 # 下一步
 
 ## 当前进度
-- 已完成：Sprint 1 (项目基础设施与首页), Sprint 2 (用户认证：手机号 + 验证码登录), Sprint 3 (素材上传与文件管理), Sprint 4 (AI 处理引擎), Sprint 5 (预览页：口误审核 + 字幕样式)
-- 当前 Sprint：Sprint 5 已完成，准备进入 Sprint 6
+- 已完成：Sprint 1 (项目基础设施与首页), Sprint 2 (用户认证：手机号 + 验证码登录), Sprint 3 (素材上传与文件管理), Sprint 4 (AI 处理引擎), Sprint 5 (预览页：口误审核 + 字幕样式), Sprint 6 (视频渲染与完成页)
+- 当前 Sprint：Sprint 6 已完成，准备进入 Sprint 7
 
 ## 已完成的内容
 
-### Sprint 1
-- 前端首页 P01：Hero 区域（标题/副标题/CTA）、4 张特性卡片、版权页脚
-- 全局布局：导航栏（Logo + 登录按钮）、AuthProvider、ToastProvider
-- 后端 FastAPI：main.py、config.py、database.py、models.py、auth.py
-- 健康检查：GET /api/health 返回 200
-- 前后端联通：Next.js rewrites 代理 /api 到后端 8000 端口
-- 移动端适配：375px 下特性卡片 2x2 网格布局
-
-### Sprint 2
-- 登录页 P02：手机号输入、验证码发送/输入、登录按钮、60s 倒计时
-- 后端认证端点：POST /api/auth/send-code、POST /api/auth/login、POST /api/auth/logout、GET /api/auth/me
-- JWT token 管理：创建/验证 JWT、Bearer token 认证
-- 前端 Auth 状态管理：AuthContext、AuthGuard
-- 导航栏用户状态切换：未登录显示"登录"按钮，已登录显示用户头像 + 下拉菜单
-
-### Sprint 3
-- 上传页 P03 完整实现：UploadZone、FileList、PreferencePanel 组件
-- 后端任务端点：POST /api/tasks、POST /api/tasks/{id}/files、PUT /api/tasks/{id}/files/reorder、DELETE /api/tasks/{id}/files/{file_id}、PUT /api/tasks/{id}/preferences、GET /api/tasks/{id}、GET /api/quota
-
-### Sprint 4
-- 后端处理管线：FFmpeg 合并、Whisper 语音识别(mock)、口误检测规则引擎、字幕生成
-- 前端处理中页 P04：3 阶段进度显示、超时检测、取消处理
-- 后台线程处理、in-memory 进度追踪
-
-### Sprint 5
-- 后端预览 API：
-  - GET /api/tasks/{id}/preview：返回文字稿(words)、口误标记(stutter_marks)、字幕(subtitles)、统计信息
-  - PUT /api/tasks/{id}/preview：保存用户调整（口误标记切换、字幕样式）
-  - 动态统计：根据当前 mark actions 实时计算 deleted_count 和 deleted_duration_ms
-- 前端预览页 P05：
-  - TranscriptPanel：展示文字稿，口误标记红色背景 + 删除线，支持点击切换 delete/keep
-  - StutterWordMark：删除态（红色背景+删除线）、保留态（绿色左竖线+正常文字）
-  - PauseMark：长停顿标记（显示停顿时长，可切换删除/保留）
-  - SubtitleStylePanel：3 套预设样式（简洁白字/黑底白字/彩色高亮）+ 视觉预览
-  - SubtitlePreview：模拟视频画面上的字幕效果预览
-  - StutterStatsBar：实时统计"共检测到 N 处口误，预计缩短 M 秒"
-  - 底部操作栏："重新处理"（次要按钮）+ "确认，开始渲染"（主按钮）
-  - 移动端适配：文字稿区域和字幕设置纵向堆叠
-- 修复 Sprint 4 P2 问题：estimated_seconds 使用 ?? 替代 || 运算符
+### Sprint 6
+- 后端渲染引擎 (`backend/services/render.py`):
+  - FFmpeg 两步渲染：先裁剪口误片段(filter_complex trim+concat)，再烧录字幕(如libass可用)
+  - 渲染进度追踪：in-memory dict，通过 GET /api/tasks/{id}/render-status 查询
+  - 自动重试：渲染失败自动重试 1 次 (RENDER_MAX_RETRY=1)
+  - WebVTT 字幕生成：为 HTML5 播放器提供带时间戳调整的 .vtt 字幕文件
+  - 无 libass 时优雅降级：跳过字幕烧录，仅做裁剪+WebVTT外挂字幕
+  - 渲染完成后：task.status="completed", 设置 expires_at=24h, 记录输出文件信息
+- 后端新端点:
+  - POST /api/tasks/{id}/render：启动渲染（已有，Sprint 6 加入实际渲染逻辑）
+  - GET /api/tasks/{id}/render-status：渲染进度（progress 0-100, estimated_seconds）
+  - GET /api/tasks/{id}/result：视频信息（时长、大小、分辨率、剪切数）
+  - GET /api/tasks/{id}/stream：视频流播放（HTML5 video src）
+  - GET /api/tasks/{id}/download：下载 MP4 文件（Content-Disposition: attachment）
+  - GET /api/tasks/{id}/subtitles.vtt：WebVTT 字幕文件
+  - POST /api/tasks/{id}/feedback：满意度反馈（up/down）
+- 前端完成页 P07 (`frontend/src/app/result/[taskId]/page.tsx`):
+  - 成功图标 + "视频已完成!" 标题
+  - HTML5 视频播放器（含 WebVTT 字幕 track）
+  - 视频信息：时长、文件大小、分辨率、口误剪切数
+  - 下载按钮（blob download）
+  - "视频将在 24 小时后自动删除，请及时下载" 提示
+  - "处理新视频" 按钮跳转上传页
+  - 满意度反馈 👍👎
+  - 渲染失败错误提示 + 重试按钮
+  - 移动端响应式（375px 适配）
+- 前端处理中页更新:
+  - 渲染状态：独立 UI，单进度条 + 百分比 + 预估时间
+  - 渲染完成自动跳转到 /result/{taskId}
+  - 渲染失败智能重试（区分处理失败 vs 渲染失败）
+- 其他修复:
+  - FileResponse 命名冲突修复（Pydantic 模型 vs FastAPI import）
+  - aiofiles 依赖添加
+  - Sprint 5 P2 修复：渲染页不再显示处理阶段步骤
 
 ## 下一个具体任务
-Sprint 5 P1 bug 已修复（循环重定向问题）。Evaluator 应复测 Sprint 5 验收标准中的"确认，开始渲染"按钮跳转行为。通过后进入 Sprint 6。
+Evaluator 应测试 Sprint 6 的验收标准。通过后进入 Sprint 7 (支付系统与额度管理)。
