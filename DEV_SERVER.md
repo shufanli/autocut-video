@@ -63,6 +63,15 @@ npm run dev
 - 提交满意度反馈: `curl -X POST http://localhost:8000/api/tasks/<task_id>/feedback -H "Authorization: Bearer <token>" -H "Content-Type: application/json" -d '{"rating":"up"}'`
 - 完成页 URL: http://localhost:3000/result/<task_id>
 
+## 支付系统测试 (Sprint 7)
+- 检查下载权限: `curl http://localhost:8000/api/payments/check-download/<task_id> -H "Authorization: Bearer <token>"`
+- 使用免费额度: `curl -X POST http://localhost:8000/api/payments/use-quota/<task_id> -H "Authorization: Bearer <token>"`
+- 创建支付订单: `curl -X POST http://localhost:8000/api/payments/create -H "Authorization: Bearer <token>" -H "Content-Type: application/json" -d '{"task_id":"<task_id>","payment_channel":"alipay"}'`
+- 查询支付状态: `curl http://localhost:8000/api/payments/<payment_id>/status -H "Authorization: Bearer <token>"`
+- 模拟支付完成: `curl -X POST http://localhost:8000/api/payments/<payment_id>/mock-pay -H "Authorization: Bearer <token>"`
+- 取消支付: `curl -X POST http://localhost:8000/api/payments/<payment_id>/cancel -H "Authorization: Bearer <token>"`
+- 支付流程: 有免费额度时直接下载(扣减额度); 无额度时弹出付费弹窗(9.9元)，MVP 使用 mock 支付(自动完成)
+
 ## 环境变量
 - `OPENAI_API_KEY`: 可选。设置后使用 OpenAI Whisper API 进行语音识别；未设置则使用 mock 数据。
 - 详见 `.env.example`
