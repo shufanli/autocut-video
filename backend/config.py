@@ -58,6 +58,11 @@ class Settings(BaseSettings):
     SATISFACTION_ENABLED: bool = True
     DEMO_ASSET_TYPE: str = "static_image"
 
+    # --- JWT ---
+    JWT_SECRET: str = "autocut-dev-secret-change-in-production"
+    JWT_ALGORITHM: str = "HS256"
+    JWT_EXPIRE_HOURS: int = 72
+
     # --- Database ---
     DATABASE_URL: str = "sqlite:///./autocut.db"
 
