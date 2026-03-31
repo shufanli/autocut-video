@@ -121,14 +121,24 @@ export default function ProcessingPage() {
     };
   }, [fetchStatus]);
 
-  // Handle retry
+  // Handle retry -- works for both processing and rendering failures
   const handleRetry = useCallback(async () => {
     if (!token || !taskId) return;
     setIsRetrying(true);
     setIsTimedOut(false);
 
+    // Determine retry endpoint based on the error context
+    // If the last known status was rendering/failed-during-render, retry render
+    // Otherwise retry process
+    const wasRendering =
+      status?.error_message?.includes("渲染") ||
+      status?.stage_key === "rendering";
+    const retryEndpoint = wasRendering
+      ? `/api/tasks/${taskId}/render`
+      : `/api/tasks/${taskId}/process`;
+
     try {
-      const res = await fetch(`/api/tasks/${taskId}/process`, {
+      const res = await fetch(retryEndpoint, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${token}`,
@@ -142,7 +152,7 @@ export default function ProcessingPage() {
         // Restart polling
         if (pollRef.current) clearInterval(pollRef.current);
         pollRef.current = setInterval(fetchStatus, POLL_INTERVAL_MS);
-        showToast("已重新开始处理", "success");
+        showToast(wasRendering ? "重新渲染已开始" : "已重新开始处理", "success");
       } else {
         const data = await res.json().catch(() => ({}));
         showToast(data.detail || "重试失败", "error");
@@ -152,7 +162,7 @@ export default function ProcessingPage() {
     } finally {
       setIsRetrying(false);
     }
-  }, [token, taskId, fetchStatus, showToast]);
+  }, [token, taskId, fetchStatus, showToast, status]);
 
   // Handle cancel
   const handleCancelConfirm = useCallback(() => {
@@ -196,9 +206,9 @@ export default function ProcessingPage() {
               {isTimedOut
                 ? "处理超时"
                 : isFailed
-                ? "处理失败"
+                ? (status?.error_message?.includes("渲染") ? "渲染失败" : "处理失败")
                 : isComplete
-                ? "处理完成"
+                ? (isRendering ? "渲染完成" : "处理完成")
                 : isRendering
                 ? "正在渲染您的视频"
                 : "正在处理您的视频"}
@@ -255,10 +265,12 @@ export default function ProcessingPage() {
               <div className="text-center py-8">
                 <XCircle className="w-16 h-16 text-danger mx-auto mb-4" />
                 <p className="text-lg font-semibold text-text-primary mb-2">
-                  处理失败
+                  {status?.error_message?.includes("渲染") ? "渲染失败" : "处理失败"}
                 </p>
                 <p className="text-sm text-text-secondary mb-6">
-                  {status?.error_message || status?.error || "处理过程中出现错误，请重试"}
+                  {status?.error_message?.includes("渲染")
+                    ? "渲染失败，请重试"
+                    : status?.error_message || status?.error || "处理过程中出现错误，请重试"}
                 </p>
                 <div className="flex items-center justify-center gap-4">
                   <button
