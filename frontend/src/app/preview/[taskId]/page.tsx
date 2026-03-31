@@ -163,7 +163,7 @@ export default function PreviewPage() {
 
   // Save adjustments to server
   const saveAdjustments = useCallback(async () => {
-    if (!token || !taskId) return;
+    if (!token || !taskId) return false;
     setIsSaving(true);
 
     try {
