@@ -19,6 +19,7 @@ import {
 import { AuthGuard } from "@/components/auth-guard";
 import { useAuth } from "@/lib/auth-context";
 import { useToast } from "@/components/toast";
+import { PaymentModal } from "@/components/payment-modal";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -39,6 +40,14 @@ interface ResultInfo {
   download_url: string;
 }
 
+interface DownloadAuth {
+  can_download: boolean;
+  reason: "free_quota" | "paid" | "needs_payment";
+  free_quota_remaining: number;
+  price_cents?: number;
+  price_display?: string;
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -55,7 +64,8 @@ function formatFileSize(bytes: number): string {
   if (bytes <= 0) return "0 B";
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  if (bytes < 1024 * 1024 * 1024)
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
@@ -67,7 +77,7 @@ export default function ResultPage() {
   const router = useRouter();
   const params = useParams();
   const taskId = params.taskId as string;
-  const { token } = useAuth();
+  const { token, refreshUser } = useAuth();
   const { showToast } = useToast();
 
   const [resultInfo, setResultInfo] = useState<ResultInfo | null>(null);
@@ -78,30 +88,48 @@ export default function ResultPage() {
   const [feedbackSubmitted, setFeedbackSubmitted] = useState(false);
   const [isRetrying, setIsRetrying] = useState(false);
 
+  // Payment state
+  const [showPaymentModal, setShowPaymentModal] = useState(false);
+  const [downloadAuth, setDownloadAuth] = useState<DownloadAuth | null>(null);
+
+  // Ref to prevent double-click on download
+  const downloadLockRef = useRef(false);
+
   const videoRef = useRef<HTMLVideoElement>(null);
 
-  // Fetch result info
+  // Fetch result info + download auth
   useEffect(() => {
     if (!token || !taskId) return;
 
-    const fetchResult = async () => {
+    const fetchData = async () => {
       try {
-        const res = await fetch(`/api/tasks/${taskId}/result`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
+        // Fetch result info and download auth in parallel
+        const [resultRes, authRes] = await Promise.all([
+          fetch(`/api/tasks/${taskId}/result`, {
+            headers: { Authorization: `Bearer ${token}` },
+          }),
+          fetch(`/api/payments/check-download/${taskId}`, {
+            headers: { Authorization: `Bearer ${token}` },
+          }),
+        ]);
 
-        if (!res.ok) {
-          if (res.status === 404) {
+        if (!resultRes.ok) {
+          if (resultRes.status === 404) {
             showToast("任务不存在", "error");
             router.push("/upload");
             return;
           }
-          const data = await res.json().catch(() => ({}));
+          const data = await resultRes.json().catch(() => ({}));
           throw new Error(data.detail || "加载结果失败");
         }
 
-        const data: ResultInfo = await res.json();
-        setResultInfo(data);
+        const resultData: ResultInfo = await resultRes.json();
+        setResultInfo(resultData);
+
+        if (authRes.ok) {
+          const authData: DownloadAuth = await authRes.json();
+          setDownloadAuth(authData);
+        }
       } catch (err) {
         const message = err instanceof Error ? err.message : "加载失败";
         setError(message);
@@ -110,13 +138,14 @@ export default function ResultPage() {
       }
     };
 
-    fetchResult();
+    fetchData();
   }, [token, taskId, router, showToast]);
 
-  // Handle download
-  const handleDownload = useCallback(async () => {
+  // ---------------------------------------------------------------------------
+  // Trigger actual file download
+  // ---------------------------------------------------------------------------
+  const triggerDownload = useCallback(async () => {
     if (!token || !taskId) return;
-    setIsDownloading(true);
 
     try {
       const res = await fetch(`/api/tasks/${taskId}/download`, {
@@ -143,10 +172,104 @@ export default function ResultPage() {
     } catch (err) {
       const message = err instanceof Error ? err.message : "下载失败";
       showToast(message, "error");
-    } finally {
-      setIsDownloading(false);
     }
   }, [token, taskId, showToast]);
+
+  // ---------------------------------------------------------------------------
+  // Handle download button click
+  // ---------------------------------------------------------------------------
+  const handleDownload = useCallback(async () => {
+    if (!token || !taskId) return;
+
+    // Prevent double-click using ref for immediate lock
+    if (downloadLockRef.current) return;
+    downloadLockRef.current = true;
+    setIsDownloading(true);
+
+    try {
+      // Re-check download auth
+      const authRes = await fetch(`/api/payments/check-download/${taskId}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      if (!authRes.ok) {
+        throw new Error("检查下载权限失败");
+      }
+
+      const authData: DownloadAuth = await authRes.json();
+      setDownloadAuth(authData);
+
+      if (authData.can_download) {
+        if (authData.reason === "free_quota") {
+          // Deduct free quota
+          const quotaRes = await fetch(`/api/payments/use-quota/${taskId}`, {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${token}`,
+              "Content-Type": "application/json",
+            },
+          });
+
+          if (!quotaRes.ok) {
+            const quotaData = await quotaRes.json().catch(() => ({}));
+            if (quotaRes.status === 402) {
+              // Quota ran out between check and deduction
+              setShowPaymentModal(true);
+              return;
+            }
+            throw new Error(quotaData.detail || "扣减额度失败");
+          }
+
+          const quotaData = await quotaRes.json();
+          // Update download auth to reflect new quota
+          setDownloadAuth({
+            ...authData,
+            free_quota_remaining: quotaData.free_quota_remaining,
+          });
+
+          // Refresh user context to update quota display
+          await refreshUser();
+        }
+        // reason === "paid" or quota just deducted -> download directly
+        await triggerDownload();
+      } else {
+        // Needs payment
+        setShowPaymentModal(true);
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "下载失败";
+      showToast(message, "error");
+    } finally {
+      setIsDownloading(false);
+      downloadLockRef.current = false;
+    }
+  }, [token, taskId, triggerDownload, showToast, refreshUser]);
+
+  // ---------------------------------------------------------------------------
+  // Handle payment success
+  // ---------------------------------------------------------------------------
+  const handlePaymentSuccess = useCallback(async () => {
+    setShowPaymentModal(false);
+
+    // Update download auth
+    setDownloadAuth({
+      can_download: true,
+      reason: "paid",
+      free_quota_remaining: downloadAuth?.free_quota_remaining ?? 0,
+    });
+
+    // Refresh user to get updated quota
+    await refreshUser();
+
+    // Auto-download after payment
+    await triggerDownload();
+  }, [downloadAuth, triggerDownload, refreshUser]);
+
+  // Handle payment modal close (cancelled/failed)
+  const handlePaymentClose = useCallback(() => {
+    setShowPaymentModal(false);
+    showToast("支付未完成，可稍后重新下载", "info");
+  }, [showToast]);
 
   // Handle feedback
   const handleFeedback = useCallback(
@@ -173,7 +296,7 @@ export default function ResultPage() {
         // Feedback submission failure is not critical
       }
     },
-    [token, taskId, feedbackSubmitted, showToast],
+    [token, taskId, feedbackSubmitted, showToast]
   );
 
   // Handle render retry (if task is failed)
@@ -263,6 +386,40 @@ export default function ResultPage() {
   }
 
   if (!resultInfo) return null;
+
+  // Determine download button label
+  const getDownloadLabel = () => {
+    if (isDownloading) {
+      return (
+        <>
+          <Loader2 className="w-5 h-5 animate-spin" />
+          下载中...
+        </>
+      );
+    }
+    if (resultInfo.expired) {
+      return (
+        <>
+          <AlertCircle className="w-5 h-5" />
+          视频已过期
+        </>
+      );
+    }
+    if (downloadAuth && !downloadAuth.can_download) {
+      return (
+        <>
+          <Download className="w-5 h-5" />
+          付费下载 &#165;9.9
+        </>
+      );
+    }
+    return (
+      <>
+        <Download className="w-5 h-5" />
+        下载视频
+      </>
+    );
+  };
 
   return (
     <AuthGuard>
@@ -364,23 +521,32 @@ export default function ResultPage() {
                   flex items-center justify-center gap-2
                 "
               >
-                {isDownloading ? (
-                  <>
-                    <Loader2 className="w-5 h-5 animate-spin" />
-                    下载中...
-                  </>
-                ) : resultInfo.expired ? (
-                  <>
-                    <AlertCircle className="w-5 h-5" />
-                    视频已过期
-                  </>
-                ) : (
-                  <>
-                    <Download className="w-5 h-5" />
-                    下载视频
-                  </>
-                )}
+                {getDownloadLabel()}
               </button>
+
+              {/* Quota / payment info */}
+              {downloadAuth && !resultInfo.expired && (
+                <div className="mt-3 text-center">
+                  {downloadAuth.reason === "needs_payment" && (
+                    <p className="text-xs text-warning">
+                      免费额度已用完，下载需支付 &#165;9.9
+                    </p>
+                  )}
+                  {downloadAuth.reason === "free_quota" &&
+                    downloadAuth.free_quota_remaining > 0 && (
+                      <p className="text-xs text-text-secondary">
+                        使用免费额度下载（剩余{" "}
+                        <span className="font-semibold text-primary">
+                          {downloadAuth.free_quota_remaining}
+                        </span>{" "}
+                        次）
+                      </p>
+                    )}
+                  {downloadAuth.reason === "paid" && (
+                    <p className="text-xs text-success">已付费，可直接下载</p>
+                  )}
+                </div>
+              )}
 
               {/* Expiry warning */}
               {!resultInfo.expired && (
@@ -468,6 +634,14 @@ export default function ResultPage() {
           </div>
         </div>
       </div>
+
+      {/* Payment modal */}
+      <PaymentModal
+        taskId={taskId}
+        isOpen={showPaymentModal}
+        onClose={handlePaymentClose}
+        onPaymentSuccess={handlePaymentSuccess}
+      />
     </AuthGuard>
   );
 }

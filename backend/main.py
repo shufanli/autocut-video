@@ -7,6 +7,7 @@ from config import settings
 from database import engine, Base
 from auth import router as auth_router
 from tasks import router as tasks_router
+from payments import router as payments_router
 
 # Create all tables on startup
 Base.metadata.create_all(bind=engine)
@@ -29,6 +30,7 @@ app.add_middleware(
 # Routers
 app.include_router(auth_router)
 app.include_router(tasks_router)
+app.include_router(payments_router)
 
 
 @app.get("/api/health")
