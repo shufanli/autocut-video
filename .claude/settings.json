@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/scripts/stop-checklist.sh",
+            "timeout": 30,
+            "statusMessage": "行为意识自查..."
+          }
+        ]
+      }
+    ]
+  }
+}
