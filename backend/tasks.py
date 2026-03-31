@@ -9,6 +9,7 @@ from datetime import datetime
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Request
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -17,6 +18,7 @@ from database import get_db
 from auth import get_current_user
 from models import User, Task, TaskFile, TaskResult
 from services.pipeline import start_processing, get_task_progress
+from services.render import start_render, get_render_progress
 
 logger = logging.getLogger("autocut.tasks")
 
@@ -412,18 +414,22 @@ def get_task_status(
         })
 
     elif task.status == "rendering":
-        # User confirmed edits, rendering in progress (Sprint 6 placeholder)
+        # Real render progress from in-memory tracker
+        render_prog = get_render_progress(task_id)
+        progress_pct = render_prog["progress"] if render_prog else 0
+        est_seconds = render_prog["estimated_seconds"] if render_prog else 120
+        render_error = render_prog.get("error", "") if render_prog else ""
         response.update({
             "stage": 1,
             "stage_name": "渲染中",
             "stage_key": "rendering",
-            "progress": 50,
-            "estimated_seconds": 60,
+            "progress": progress_pct,
+            "estimated_seconds": est_seconds,
             "total_stages": 1,
             "stages": [
                 {"key": "rendering", "name": "渲染中", "status": "active"},
             ],
-            "error": "",
+            "error": render_error,
         })
 
     elif task.status == "failed":
@@ -595,19 +601,15 @@ def update_preview_data(
 # ---------------------------------------------------------------------------
 
 @router.post("/{task_id}/render")
-def start_render(
+def trigger_render(
     task_id: str,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Transition a task from 'preview' to 'rendering' status.
+    """Start rendering: transition task to 'rendering' and launch FFmpeg pipeline.
 
-    This endpoint is called when the user confirms their edits on the preview
-    page and clicks "确认，开始渲染". It changes the task status so that the
-    processing page does not redirect back to preview.
-
-    Full rendering logic will be implemented in Sprint 6. For now this only
-    performs the state transition.
+    Called when the user confirms edits on the preview page.
+    Changes task status and spawns a background render thread.
     """
     task = db.query(Task).filter(Task.id == task_id, Task.user_id == user.id).first()
     if not task:
@@ -623,9 +625,287 @@ def start_render(
     db.commit()
     logger.info(f"Task {task_id} status changed to rendering")
 
+    # Start actual rendering in background
+    try:
+        start_render(task_id)
+    except Exception as e:
+        logger.error(f"Failed to start render: {e}")
+        # Don't revert status -- the render progress tracker will handle errors
+
     return {
         "success": True,
         "task_id": task_id,
         "status": "rendering",
         "message": "渲染已开始",
     }
+
+
+# ---------------------------------------------------------------------------
+# Render status endpoint (Sprint 6)
+# ---------------------------------------------------------------------------
+
+@router.get("/{task_id}/render-status")
+def get_render_status(
+    task_id: str,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Get render progress for a task.
+
+    Returns progress percentage, estimated time, and any errors.
+    """
+    task = db.query(Task).filter(Task.id == task_id, Task.user_id == user.id).first()
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+
+    response = {
+        "task_id": task_id,
+        "status": task.status,
+        "error_message": task.error_message,
+    }
+
+    if task.status == "rendering":
+        progress = get_render_progress(task_id)
+        if progress:
+            response.update({
+                "progress": progress["progress"],
+                "estimated_seconds": progress["estimated_seconds"],
+                "error": progress.get("error", ""),
+            })
+        else:
+            response.update({
+                "progress": 0,
+                "estimated_seconds": 120,
+                "error": "",
+            })
+
+    elif task.status == "completed":
+        response.update({
+            "progress": 100,
+            "estimated_seconds": 0,
+            "error": "",
+        })
+
+    elif task.status == "failed":
+        response.update({
+            "progress": 0,
+            "estimated_seconds": 0,
+            "error": task.error_message or "渲染失败",
+        })
+
+    else:
+        response.update({
+            "progress": 0,
+            "estimated_seconds": 0,
+            "error": "",
+        })
+
+    return response
+
+
+# ---------------------------------------------------------------------------
+# Download endpoint (Sprint 6)
+# ---------------------------------------------------------------------------
+
+@router.get("/{task_id}/download")
+def download_output(
+    task_id: str,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Download the rendered output video.
+
+    Task must be in 'completed' status. Returns the MP4 file.
+    """
+    task = db.query(Task).filter(Task.id == task_id, Task.user_id == user.id).first()
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+
+    if task.status != "completed":
+        raise HTTPException(
+            status_code=400,
+            detail=f"视频尚未完成(当前状态: {task.status})",
+        )
+
+    # Check if expired
+    if task.expires_at and datetime.utcnow() > task.expires_at:
+        raise HTTPException(
+            status_code=410,
+            detail="视频已过期删除，请重新处理",
+        )
+
+    # Find the output file
+    output_file = (
+        db.query(TaskFile)
+        .filter(TaskFile.task_id == task_id, TaskFile.file_type == "output")
+        .first()
+    )
+
+    if not output_file or not os.path.exists(output_file.storage_path):
+        raise HTTPException(status_code=404, detail="输出文件不存在")
+
+    # Generate a nice filename
+    download_filename = f"autocut_{task_id[:8]}.mp4"
+
+    return FileResponse(
+        path=output_file.storage_path,
+        media_type="video/mp4",
+        filename=download_filename,
+        headers={
+            "Content-Disposition": f'attachment; filename="{download_filename}"',
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# Result info endpoint (Sprint 6)
+# ---------------------------------------------------------------------------
+
+@router.get("/{task_id}/result")
+def get_result_info(
+    task_id: str,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Get result information for a completed task.
+
+    Returns video info (duration, size, resolution) and streaming URL.
+    """
+    task = db.query(Task).filter(Task.id == task_id, Task.user_id == user.id).first()
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+
+    if task.status not in ("completed",):
+        raise HTTPException(
+            status_code=400,
+            detail=f"视频尚未完成(当前状态: {task.status})",
+        )
+
+    # Load render result
+    render_result = (
+        db.query(TaskResult)
+        .filter(TaskResult.task_id == task_id, TaskResult.agent_name == "render")
+        .first()
+    )
+
+    render_info = render_result.result_json if render_result else {}
+
+    # Check expiry
+    expired = False
+    if task.expires_at and datetime.utcnow() > task.expires_at:
+        expired = True
+
+    return {
+        "task_id": task_id,
+        "status": task.status,
+        "duration_ms": task.output_duration_ms or render_info.get("output_duration_ms", 0),
+        "file_size_bytes": task.output_file_size_bytes or render_info.get("output_size_bytes", 0),
+        "resolution": render_info.get("resolution", "unknown"),
+        "subtitle_style": render_info.get("subtitle_style", "clean-white"),
+        "cuts_applied": render_info.get("cuts_applied", 0),
+        "completed_at": task.completed_at.isoformat() if task.completed_at else "",
+        "expires_at": task.expires_at.isoformat() if task.expires_at else "",
+        "expired": expired,
+        "video_url": f"/api/tasks/{task_id}/stream",
+        "download_url": f"/api/tasks/{task_id}/download",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Stream endpoint (Sprint 6) -- serve video for HTML5 player
+# ---------------------------------------------------------------------------
+
+@router.get("/{task_id}/stream")
+def stream_video(
+    task_id: str,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Stream the rendered output video for in-browser playback.
+
+    Similar to download but without Content-Disposition: attachment.
+    """
+    task = db.query(Task).filter(Task.id == task_id, Task.user_id == user.id).first()
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+
+    if task.status != "completed":
+        raise HTTPException(
+            status_code=400,
+            detail=f"视频尚未完成(当前状态: {task.status})",
+        )
+
+    # Find the output file
+    output_file = (
+        db.query(TaskFile)
+        .filter(TaskFile.task_id == task_id, TaskFile.file_type == "output")
+        .first()
+    )
+
+    if not output_file or not os.path.exists(output_file.storage_path):
+        raise HTTPException(status_code=404, detail="输出文件不存在")
+
+    return FileResponse(
+        path=output_file.storage_path,
+        media_type="video/mp4",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Satisfaction feedback endpoint (Sprint 6)
+# ---------------------------------------------------------------------------
+
+class FeedbackRequest(BaseModel):
+    rating: str  # "up" or "down"
+    comment: Optional[str] = None
+
+
+@router.post("/{task_id}/feedback")
+def submit_feedback(
+    task_id: str,
+    body: FeedbackRequest,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Submit satisfaction feedback for a completed task."""
+    task = db.query(Task).filter(Task.id == task_id, Task.user_id == user.id).first()
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+
+    if task.status != "completed":
+        raise HTTPException(
+            status_code=400,
+            detail="只能对已完成的任务提交反馈",
+        )
+
+    if body.rating not in ("up", "down"):
+        raise HTTPException(status_code=400, detail="rating 必须是 'up' 或 'down'")
+
+    # Save feedback as a task result
+    existing = (
+        db.query(TaskResult)
+        .filter(TaskResult.task_id == task_id, TaskResult.agent_name == "feedback")
+        .first()
+    )
+
+    feedback_data = {
+        "rating": body.rating,
+        "comment": body.comment or "",
+        "submitted_at": datetime.utcnow().isoformat(),
+    }
+
+    if existing:
+        existing.result_json = feedback_data
+        from sqlalchemy.orm.attributes import flag_modified
+        flag_modified(existing, "result_json")
+    else:
+        feedback_result = TaskResult(
+            task_id=task_id,
+            agent_name="feedback",
+            result_json=feedback_data,
+        )
+        db.add(feedback_result)
+
+    db.commit()
+
+    return {"success": True, "message": "感谢您的反馈!"}

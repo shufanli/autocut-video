@@ -74,14 +74,14 @@ export default function ProcessingPage() {
         return;
       }
 
-      // Rendering complete -- redirect to results/download page
+      // Rendering complete -- redirect to result/download page
       if (data.status === "completed") {
         if (pollRef.current) {
           clearInterval(pollRef.current);
           pollRef.current = null;
         }
         setTimeout(() => {
-          router.push(`/preview/${taskId}`);
+          router.push(`/result/${taskId}`);
         }, 1500);
         return;
       }
@@ -299,7 +299,7 @@ export default function ProcessingPage() {
             )}
 
             {/* Normal processing state (or complete) */}
-            {!isTimedOut && !isFailed && (
+            {!isTimedOut && !isFailed && !isRendering && (
               <>
                 <ProgressSteps
                   stages={stages}
@@ -339,6 +339,55 @@ export default function ProcessingPage() {
                   </div>
                 )}
               </>
+            )}
+
+            {/* Rendering state -- single progress bar */}
+            {!isTimedOut && !isFailed && isRendering && (
+              <div className="py-6">
+                <div className="text-center mb-6">
+                  <Loader2 className="w-12 h-12 text-primary animate-spin mx-auto mb-4" />
+                  <p className="text-lg font-semibold text-text-primary">
+                    正在渲染中...
+                  </p>
+                  {estimatedSeconds > 0 && (
+                    <p className="text-sm text-text-secondary mt-1">
+                      预计剩余时间：
+                      {estimatedSeconds >= 60
+                        ? `${Math.ceil(estimatedSeconds / 60)} 分钟`
+                        : `${estimatedSeconds} 秒`}
+                    </p>
+                  )}
+                </div>
+
+                {/* Render progress bar */}
+                <div className="w-full max-w-md mx-auto">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-sm text-text-secondary">渲染进度</span>
+                    <span className="text-sm font-semibold text-primary">
+                      {status?.progress ?? 0}%
+                    </span>
+                  </div>
+                  <div className="h-3 bg-gray-100 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-primary rounded-full transition-all duration-500 ease-out"
+                      style={{ width: `${status?.progress ?? 0}%` }}
+                    />
+                  </div>
+                </div>
+
+                {/* Cancel button */}
+                <div className="mt-8 text-center">
+                  <button
+                    onClick={() => setShowCancelConfirm(true)}
+                    className="
+                      text-sm text-text-secondary hover:text-text-primary
+                      transition-colors duration-150
+                    "
+                  >
+                    取消处理
+                  </button>
+                </div>
+              </div>
             )}
           </div>
         </div>
