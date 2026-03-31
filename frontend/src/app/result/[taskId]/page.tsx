@@ -290,7 +290,15 @@ export default function ResultPage() {
                 preload="metadata"
                 playsInline
                 src={`/api/tasks/${taskId}/stream`}
+                crossOrigin="anonymous"
               >
+                <track
+                  kind="subtitles"
+                  src={`/api/tasks/${taskId}/subtitles.vtt`}
+                  srcLang="zh"
+                  label="中文字幕"
+                  default
+                />
                 <p className="text-white text-center p-4">
                   您的浏览器不支持视频播放
                 </p>

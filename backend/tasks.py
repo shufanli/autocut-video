@@ -40,7 +40,7 @@ class TaskResponse(BaseModel):
     files: list
 
 
-class FileResponse(BaseModel):
+class TaskFileSchema(BaseModel):
     id: str
     original_filename: str
     file_size_bytes: int
@@ -848,6 +848,35 @@ def stream_video(
     return FileResponse(
         path=output_file.storage_path,
         media_type="video/mp4",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Subtitle track endpoint (Sprint 6) -- WebVTT for HTML5 player
+# ---------------------------------------------------------------------------
+
+@router.get("/{task_id}/subtitles.vtt")
+def get_subtitle_track(
+    task_id: str,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Serve WebVTT subtitle track for the completed video."""
+    task = db.query(Task).filter(Task.id == task_id, Task.user_id == user.id).first()
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+
+    if task.status != "completed":
+        raise HTTPException(status_code=400, detail="视频尚未完成")
+
+    vtt_path = os.path.join(settings.UPLOAD_DIR, task_id, "subtitles.vtt")
+    if not os.path.exists(vtt_path):
+        raise HTTPException(status_code=404, detail="字幕文件不存在")
+
+    return FileResponse(
+        path=vtt_path,
+        media_type="text/vtt",
+        headers={"Content-Type": "text/vtt; charset=utf-8"},
     )
 
 

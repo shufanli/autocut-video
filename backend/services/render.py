@@ -2,6 +2,10 @@
 
 Takes the merged video, removes stutter segments the user marked for deletion,
 burns in subtitles with the selected style, and outputs the final video.
+
+Note: Subtitle burn-in requires FFmpeg compiled with --enable-libass.
+If libass is not available, the render engine will skip subtitle burn-in
+and provide subtitles via WebVTT track in the HTML5 player.
 """
 
 import logging
@@ -147,6 +151,7 @@ def _run_render(task_id: str, retry_count: int = 0) -> None:
 
         # 7. Cut video segments and concatenate
         output_path = os.path.join(task_dir, "output.mp4")
+        has_subtitle_support = _check_subtitle_support()
 
         if delete_segments:
             # There are cuts to make
@@ -157,8 +162,9 @@ def _run_render(task_id: str, retry_count: int = 0) -> None:
                 subtitle_style,
                 output_path,
                 task_id,
+                burn_subtitles=has_subtitle_support,
             )
-        else:
+        elif has_subtitle_support:
             # No cuts -- just burn in subtitles
             _render_subtitles_only(
                 merged_path,
@@ -167,6 +173,16 @@ def _run_render(task_id: str, retry_count: int = 0) -> None:
                 output_path,
                 task_id,
             )
+        else:
+            # No cuts and no subtitle support -- just copy the merged file
+            logger.info(f"[{task_id[:8]}] No cuts, no subtitle support, copying merged")
+            _update_render_progress(task_id, progress=30, estimated_seconds=30)
+            _copy_video(merged_path, output_path)
+            _update_render_progress(task_id, progress=85, estimated_seconds=10)
+
+        # 7.5 Generate WebVTT subtitle file for in-player display
+        vtt_path = os.path.join(task_dir, "subtitles.vtt")
+        _generate_vtt(subtitles, delete_segments, vtt_path)
 
         _update_render_progress(task_id, progress=90, estimated_seconds=10)
 
@@ -265,33 +281,61 @@ def _render_with_cuts(
     subtitle_style: str,
     output_path: str,
     task_id: str,
+    burn_subtitles: bool = True,
 ) -> None:
-    """Render video with cuts and subtitle burn-in.
+    """Render video with cuts and optionally subtitle burn-in.
 
-    Strategy:
-    1. Use FFmpeg filter_complex to select/trim and concat keep segments
-    2. Apply subtitle filter on the concatenated output
-    3. Apply audio crossfade at cut points
+    If burn_subtitles is True (libass available):
+      Two-pass: cut+concat -> subtitle burn
+    If burn_subtitles is False:
+      Single pass: cut+concat directly to output
     """
     if not keep_segments:
         raise RuntimeError("No keep segments to render")
 
-    # Build FFmpeg complex filter
+    if burn_subtitles:
+        task_dir = os.path.dirname(output_path)
+        concat_temp = os.path.join(task_dir, "concat_temp.mp4")
+
+        try:
+            _update_render_progress(task_id, progress=25, estimated_seconds=80)
+            _cut_and_concat(merged_path, keep_segments, concat_temp, task_id)
+
+            _update_render_progress(task_id, progress=55, estimated_seconds=45)
+            _burn_subtitles(concat_temp, srt_path, subtitle_style, output_path, task_id)
+
+            _update_render_progress(task_id, progress=85, estimated_seconds=15)
+        finally:
+            try:
+                if os.path.exists(concat_temp):
+                    os.remove(concat_temp)
+            except OSError:
+                pass
+    else:
+        # Single pass: cut+concat directly to output
+        _update_render_progress(task_id, progress=25, estimated_seconds=60)
+        _cut_and_concat(merged_path, keep_segments, output_path, task_id)
+        _update_render_progress(task_id, progress=85, estimated_seconds=15)
+
+
+def _cut_and_concat(
+    merged_path: str,
+    keep_segments: List[Tuple[int, int]],
+    output_path: str,
+    task_id: str,
+) -> None:
+    """Cut and concatenate keep segments using filter_complex."""
     filter_parts = []
     video_concat_inputs = []
     audio_concat_inputs = []
-
-    crossfade_ms = settings.CROSSFADE_MS
 
     for i, (start_ms, end_ms) in enumerate(keep_segments):
         start_sec = start_ms / 1000.0
         end_sec = end_ms / 1000.0
 
-        # Trim video
         filter_parts.append(
             f"[0:v]trim=start={start_sec:.3f}:end={end_sec:.3f},setpts=PTS-STARTPTS[v{i}]"
         )
-        # Trim audio
         filter_parts.append(
             f"[0:a]atrim=start={start_sec:.3f}:end={end_sec:.3f},asetpts=PTS-STARTPTS[a{i}]"
         )
@@ -299,37 +343,21 @@ def _render_with_cuts(
         audio_concat_inputs.append(f"[a{i}]")
 
     n = len(keep_segments)
-
-    # Concat video segments
     filter_parts.append(
-        f"{''.join(video_concat_inputs)}concat=n={n}:v=1:a=0[vconcat]"
+        f"{''.join(video_concat_inputs)}concat=n={n}:v=1:a=0[vout]"
+    )
+    filter_parts.append(
+        f"{''.join(audio_concat_inputs)}concat=n={n}:v=0:a=1[aout]"
     )
 
-    # Concat audio segments with crossfade
-    if n > 1 and crossfade_ms > 0:
-        # Simple concat for audio -- crossfade is complex with variable segments
-        # Use acrossfade for adjacent pairs or just concat
-        filter_parts.append(
-            f"{''.join(audio_concat_inputs)}concat=n={n}:v=0:a=1[aconcat]"
-        )
-    else:
-        filter_parts.append(
-            f"{''.join(audio_concat_inputs)}concat=n={n}:v=0:a=1[aconcat]"
-        )
-
-    # Apply subtitles on concatenated video
-    escaped_srt = srt_path.replace("\\", "/").replace(":", "\\:").replace("'", "\\'")
-    subtitle_filter = _build_subtitle_filter(escaped_srt, subtitle_style)
-    filter_parts.append(f"[vconcat]{subtitle_filter}[vout]")
-
-    filter_complex = ";\n".join(filter_parts)
+    filter_complex = ";".join(filter_parts)
 
     cmd = [
         "ffmpeg", "-y",
         "-i", merged_path,
         "-filter_complex", filter_complex,
         "-map", "[vout]",
-        "-map", "[aconcat]",
+        "-map", "[aout]",
         "-c:v", "libx264",
         "-preset", "fast",
         "-crf", "23",
@@ -339,23 +367,44 @@ def _render_with_cuts(
         output_path,
     ]
 
-    logger.info(f"[{task_id[:8]}] Running FFmpeg render with cuts...")
-    logger.debug(f"Filter complex:\n{filter_complex}")
+    logger.info(f"[{task_id[:8]}] FFmpeg cut+concat pass...")
 
-    _update_render_progress(task_id, progress=30, estimated_seconds=60)
-
-    result = subprocess.run(
-        cmd,
-        capture_output=True,
-        text=True,
-        timeout=600,
-    )
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
 
     if result.returncode != 0:
-        logger.error(f"FFmpeg render failed: {result.stderr[-1000:]}")
-        raise RuntimeError(f"FFmpeg render failed: {result.stderr[-500:]}")
+        logger.error(f"FFmpeg cut failed: {result.stderr[-1000:]}")
+        raise RuntimeError(f"FFmpeg cut failed: {result.stderr[-500:]}")
 
-    _update_render_progress(task_id, progress=85, estimated_seconds=15)
+
+def _burn_subtitles(
+    input_path: str,
+    srt_path: str,
+    subtitle_style: str,
+    output_path: str,
+    task_id: str,
+) -> None:
+    """Burn subtitles onto a video file using the -vf subtitles filter."""
+    subtitle_filter = _build_subtitle_vf(srt_path, subtitle_style)
+
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", input_path,
+        "-vf", subtitle_filter,
+        "-c:v", "libx264",
+        "-preset", "fast",
+        "-crf", "23",
+        "-c:a", "copy",
+        "-movflags", "+faststart",
+        output_path,
+    ]
+
+    logger.info(f"[{task_id[:8]}] FFmpeg subtitle burn pass...")
+
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+
+    if result.returncode != 0:
+        logger.error(f"FFmpeg subtitle burn failed: {result.stderr[-1000:]}")
+        raise RuntimeError(f"FFmpeg subtitle burn failed: {result.stderr[-500:]}")
 
 
 def _render_subtitles_only(
@@ -366,13 +415,12 @@ def _render_subtitles_only(
     task_id: str,
 ) -> None:
     """Render video with just subtitle burn-in (no cuts)."""
-    escaped_srt = srt_path.replace("\\", "/").replace(":", "\\:").replace("'", "\\'")
-    subtitle_filter = _build_subtitle_filter(escaped_srt, subtitle_style)
+    subtitle_filter = _build_subtitle_vf(srt_path, subtitle_style)
 
     cmd = [
         "ffmpeg", "-y",
         "-i", merged_path,
-        "-vf", subtitle_filter.replace("[vout]", ""),
+        "-vf", subtitle_filter,
         "-c:v", "libx264",
         "-preset", "fast",
         "-crf", "23",
@@ -385,12 +433,7 @@ def _render_subtitles_only(
 
     _update_render_progress(task_id, progress=30, estimated_seconds=60)
 
-    result = subprocess.run(
-        cmd,
-        capture_output=True,
-        text=True,
-        timeout=600,
-    )
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
 
     if result.returncode != 0:
         logger.error(f"FFmpeg subtitle render failed: {result.stderr[-1000:]}")
@@ -399,9 +442,22 @@ def _render_subtitles_only(
     _update_render_progress(task_id, progress=85, estimated_seconds=15)
 
 
-def _build_subtitle_filter(escaped_srt: str, style: str) -> str:
-    """Build FFmpeg subtitles filter string based on style."""
-    # Base: subtitles=file.srt:force_style='...'
+def _build_subtitle_vf(srt_path: str, style: str) -> str:
+    """Build FFmpeg -vf subtitles filter string based on style.
+
+    Properly escapes the SRT path for FFmpeg filter syntax.
+    No stream labels -- this is for use with -vf, not -filter_complex.
+    """
+    # FFmpeg subtitles filter requires special escaping:
+    # 1. Backslashes must be doubled
+    # 2. Colons in paths must be escaped with backslash
+    # 3. Single quotes inside the filter value need escaping
+    escaped = srt_path.replace("\\", "/")
+    # For the subtitles filter, colons and special chars in filenames
+    # need escaping. Use the filename= syntax for robustness.
+    escaped = escaped.replace("'", "'\\''")
+    escaped = escaped.replace(":", "\\:")
+
     if style == "black-bg":
         force_style = (
             "FontName=PingFang SC,FontSize=24,PrimaryColour=&H00FFFFFF,"
@@ -423,7 +479,7 @@ def _build_subtitle_filter(escaped_srt: str, style: str) -> str:
             "MarginV=30,Alignment=2"
         )
 
-    return f"subtitles='{escaped_srt}':force_style='{force_style}'[vout]"
+    return f"subtitles='{escaped}':force_style='{force_style}'"
 
 
 # ---------------------------------------------------------------------------
@@ -613,3 +669,100 @@ def _get_video_resolution(file_path: str) -> str:
     except Exception as e:
         logger.warning(f"ffprobe resolution failed for {file_path}: {e}")
     return "unknown"
+
+
+def _check_subtitle_support() -> bool:
+    """Check if FFmpeg has subtitle filter support (requires libass)."""
+    try:
+        cmd = ["ffmpeg", "-filters"]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        if result.returncode == 0:
+            return "subtitles" in result.stdout
+    except Exception:
+        pass
+    return False
+
+
+def _copy_video(src: str, dst: str) -> None:
+    """Copy a video file using FFmpeg (stream copy, no re-encoding)."""
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", src,
+        "-c", "copy",
+        "-movflags", "+faststart",
+        dst,
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    if result.returncode != 0:
+        raise RuntimeError(f"FFmpeg copy failed: {result.stderr[-500:]}")
+
+
+def _ms_to_vtt_time(ms: int) -> str:
+    """Convert milliseconds to WebVTT time format (HH:MM:SS.mmm)."""
+    if ms < 0:
+        ms = 0
+    hours = ms // 3600000
+    ms %= 3600000
+    minutes = ms // 60000
+    ms %= 60000
+    seconds = ms // 1000
+    millis = ms % 1000
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}.{millis:03d}"
+
+
+def _generate_vtt(
+    subtitles: List[dict],
+    delete_segments: List[Tuple[int, int]],
+    output_path: str,
+) -> None:
+    """Generate a WebVTT subtitle file for HTML5 video player.
+
+    Adjusts timestamps for cuts (same logic as SRT adjustment).
+    """
+    def _time_after_cuts(original_ms: int) -> int:
+        removed_before = 0
+        for del_start, del_end in delete_segments:
+            if original_ms <= del_start:
+                break
+            elif original_ms >= del_end:
+                removed_before += del_end - del_start
+            else:
+                removed_before += original_ms - del_start
+                break
+        return max(0, original_ms - removed_before)
+
+    lines = ["WEBVTT", ""]
+
+    idx = 1
+    for sub in subtitles:
+        start_ms = sub.get("start_ms", 0)
+        end_ms = sub.get("end_ms", 0)
+        text = sub.get("text", "")
+
+        # Check if entirely deleted
+        entirely_deleted = False
+        for del_start, del_end in delete_segments:
+            if start_ms >= del_start and end_ms <= del_end:
+                entirely_deleted = True
+                break
+
+        if entirely_deleted:
+            continue
+
+        new_start = _time_after_cuts(start_ms)
+        new_end = _time_after_cuts(end_ms)
+
+        if new_end <= new_start:
+            continue
+
+        lines.append(str(idx))
+        lines.append(f"{_ms_to_vtt_time(new_start)} --> {_ms_to_vtt_time(new_end)}")
+        lines.append(text)
+        lines.append("")
+        idx += 1
+
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
+
+    logger.info(f"WebVTT written: {idx - 1} cues to {output_path}")
