@@ -25,7 +25,11 @@ class Settings(BaseSettings):
     MAX_TOTAL_DURATION_MIN: int = 30
     SUPPORTED_FORMATS: List[str] = ["mp4", "mov", "webm"]
     MAX_RESOLUTION: str = "1080p"
-    FILLER_WORDS: List[str] = ["嗯", "啊", "那个", "就是", "然后"]
+    FILLER_WORDS: List[str] = [
+        "嗯", "啊", "呃", "哦", "噢", "哈", "嘿", "唉", "哎", "呀",
+        "那个", "就是", "然后", "这个",
+        "就是说", "怎么说", "也就是",
+    ]
     LONG_PAUSE_THRESHOLD_MS: int = 1500
     PAUSE_SHORTEN_TARGET_MS: int = 500
     MAX_EFFECTS_PER_MINUTE: int = 3
@@ -77,7 +81,7 @@ class Settings(BaseSettings):
 
     # --- SiliconFlow API (OpenAI-compatible, preferred for Whisper) ---
     SILICONFLOW_API_KEY: str = ""
-    SILICONFLOW_WHISPER_MODEL: str = "FunAudioLLM/SenseVoiceSmall"
+    SILICONFLOW_WHISPER_MODEL: str = "TeleAI/TeleSpeechASR"
     SILICONFLOW_API_BASE_URL: str = "https://api.siliconflow.cn/v1/audio/transcriptions"
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}

@@ -5,13 +5,26 @@ Output format: list of word-level segments:
 
 Strategy (priority order):
     1. If SILICONFLOW_API_KEY is set, use SiliconFlow API (OpenAI-compatible).
-    2. If OPENAI_API_KEY is set, use the OpenAI API (whisper-1 model).
+       - Preferred model: TeleAI/TeleSpeechASR (returns segment-level timestamps).
+       - Fallback: FunAudioLLM/SenseVoiceSmall (text-only, no timestamps).
+    2. If OPENAI_API_KEY is set, use the OpenAI API (whisper-1 model with word timestamps).
     3. Otherwise, generate a mock transcript for development/testing.
+
+Timestamp quality hierarchy:
+    - word-level (OpenAI whisper-1 with timestamp_granularities[]=word): best
+    - segment-level (TeleSpeechASR): good -- segments are split into Chinese
+      words using a regex-based tokenizer that respects word boundaries
+    - text-only (SenseVoiceSmall): poor -- timestamps are synthesized uniformly
+
+For Chinese, segment text is split into meaningful word units (2-4 chars)
+instead of individual characters, giving much better timestamp accuracy
+for stutter detection and subtitle generation.
 """
 
 import logging
 import math
 import os
+import re
 import subprocess
 from typing import List, TypedDict
 
@@ -25,11 +38,124 @@ class WordSegment(TypedDict):
     confidence: float
 
 
+# ---------------------------------------------------------------------------
+# Chinese word segmentation (regex-based, no external dependency)
+# ---------------------------------------------------------------------------
+
+# Common Chinese words that should be kept as atomic units for tokenization.
+# Ordered longest-first for greedy matching in the forward maximum match algorithm.
+_CHINESE_WORD_DICT: set = set()
+_CHINESE_MAX_WORD_LEN = 1
+
+def _init_word_dict():
+    """Initialize the Chinese word dictionary for tokenization."""
+    global _CHINESE_WORD_DICT, _CHINESE_MAX_WORD_LEN
+    words = [
+        # 4-char common phrases
+        "也就是说",
+        # 3-char fillers / common words
+        "比如说", "也就是", "怎么说", "聊一聊", "想一想", "看一看", "说一说",
+        "试一试", "等一下", "差不多", "不一定", "所以说", "对不对", "创作者",
+        "过程中",
+        # 2-char fillers / conjunctions / common words
+        "那个", "就是", "然后", "因为", "所以", "但是", "不过", "或者",
+        "可以", "这个", "那么", "什么", "怎么", "如果", "虽然", "已经",
+        "可能", "应该", "其实", "本来", "确实", "大概", "一般", "特别",
+        "非常", "真的", "简单", "复杂", "基本", "比较", "稍微",
+        "我们", "你们", "他们", "她们", "大家", "自己", "别人",
+        "一个", "一些", "一起", "一样", "一直", "一定",
+        "现在", "以前", "之后", "以后", "今天", "明天", "昨天",
+        "视频", "剪辑", "内容", "创作", "素材", "字幕", "口播",
+        "录制", "处理", "自动", "口误", "工具", "帮助", "问题",
+        "时候", "地方", "开始", "结束", "继续", "需要", "觉得",
+        "知道", "喜欢", "使用", "方法", "过程", "结果", "效果",
+        "大家", "大量", "关于", "话题", "很多", "每天", "难免",
+        "出现", "重复", "词语", "停顿", "开发", "这些",
+    ]
+    _CHINESE_WORD_DICT = set(words)
+    _CHINESE_MAX_WORD_LEN = max(len(w) for w in words) if words else 1
+
+_init_word_dict()
+
+# Pattern for non-CJK tokens
+_NON_CJK_PATTERN = re.compile(
+    r"[a-zA-Z]+(?:'[a-zA-Z]+)?"  # English word
+    r"|[0-9]+(?:\.[0-9]+)?"       # number
+)
+
+
+def _segment_chinese_text(text: str) -> List[str]:
+    """Split Chinese text into word-like units using forward maximum matching.
+
+    Uses a dictionary-based approach (forward maximum match) which is the
+    standard baseline for Chinese word segmentation. Known words in the
+    dictionary are matched greedily (longest match first). Unknown sequences
+    fall back to single-character tokens.
+
+    This is much better than character-level splitting for timestamp
+    distribution because Chinese words are typically 2-4 characters.
+
+    Examples:
+        "大家好今天我们来聊一聊" -> ["大家", "好", "今天", "我们", "来", "聊一聊"]
+        "视频剪辑的话题" -> ["视频", "剪辑", "的", "话题"]
+        "嗯就是然后那个" -> ["嗯", "就是", "然后", "那个"]
+    """
+    text = text.strip()
+    if not text:
+        return []
+
+    tokens: List[str] = []
+    i = 0
+    n = len(text)
+
+    while i < n:
+        char = text[i]
+
+        # Skip whitespace
+        if char.isspace():
+            i += 1
+            continue
+
+        # Handle non-CJK characters (English, numbers, punctuation)
+        if not ('\u4e00' <= char <= '\u9fff'):
+            m = _NON_CJK_PATTERN.match(text, i)
+            if m:
+                tokens.append(m.group())
+                i = m.end()
+            else:
+                # Single non-CJK char (punctuation etc)
+                tokens.append(char)
+                i += 1
+            continue
+
+        # Forward maximum matching for CJK characters
+        matched = False
+        max_len = min(_CHINESE_MAX_WORD_LEN, n - i)
+        for length in range(max_len, 1, -1):
+            candidate = text[i:i + length]
+            if candidate in _CHINESE_WORD_DICT:
+                tokens.append(candidate)
+                i += length
+                matched = True
+                break
+
+        if not matched:
+            # Single CJK character (not part of any known word)
+            tokens.append(char)
+            i += 1
+
+    return tokens
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
 def transcribe_audio(
     video_path: str,
     openai_api_key: str = "",
     siliconflow_api_key: str = "",
-    siliconflow_model: str = "FunAudioLLM/SenseVoiceSmall",
+    siliconflow_model: str = "TeleAI/TeleSpeechASR",
     siliconflow_base_url: str = "https://api.siliconflow.cn/v1/audio/transcriptions",
 ) -> List[WordSegment]:
     """Transcribe a video/audio file to word-level segments.
@@ -38,14 +164,15 @@ def transcribe_audio(
         video_path: Path to the video file (mp4, mov, webm).
         openai_api_key: OpenAI API key. If empty, falls back to mock.
         siliconflow_api_key: SiliconFlow API key. Takes priority over OpenAI.
-        siliconflow_model: Model name for SiliconFlow (e.g. FunAudioLLM/SenseVoiceSmall).
+        siliconflow_model: Model name for SiliconFlow.
+            Recommended: "TeleAI/TeleSpeechASR" (has timestamps).
         siliconflow_base_url: SiliconFlow transcription endpoint URL.
 
     Returns:
         List of WordSegment dicts with word-level timestamps.
     """
     if siliconflow_api_key:
-        logger.info("Using SiliconFlow API for transcription")
+        logger.info(f"Using SiliconFlow API for transcription (model={siliconflow_model})")
         return _transcribe_whisper_api(
             video_path,
             api_key=siliconflow_api_key,
@@ -100,16 +227,17 @@ def _transcribe_whisper_api(
     model: str,
     provider: str,
 ) -> List[WordSegment]:
-    """Transcribe using an OpenAI-compatible Whisper API with word-level timestamps.
+    """Transcribe using an OpenAI-compatible Whisper API with best available timestamps.
 
-    Works with both OpenAI and SiliconFlow APIs since SiliconFlow is OpenAI-compatible.
+    Works with both OpenAI and SiliconFlow APIs. Automatically picks the best
+    timestamp granularity available from the response.
 
     Args:
         video_path: Path to the video file.
         api_key: API key for authentication.
         api_url: Full URL to the transcriptions endpoint.
-        model: Model name (e.g. 'whisper-1' for OpenAI, 'FunAudioLLM/SenseVoiceSmall' for SiliconFlow).
-        provider: Provider name for logging (e.g. 'OpenAI', 'SiliconFlow').
+        model: Model name.
+        provider: Provider name for logging.
     """
     import httpx
 
@@ -118,19 +246,15 @@ def _transcribe_whisper_api(
 
     try:
         with open(audio_path, "rb") as audio_file:
-            # Build request data -- SiliconFlow accepts the same format as OpenAI
+            # Build request -- always request verbose_json for timestamps
             data = {
                 "model": model,
                 "response_format": "verbose_json",
                 "language": "zh",
+                # Request word-level timestamps. Supported by OpenAI whisper-1.
+                # SiliconFlow models may ignore this but it doesn't cause errors.
+                "timestamp_granularities[]": "word",
             }
-
-            # timestamp_granularities is supported by OpenAI; SiliconFlow may
-            # or may not support it depending on the model. We include it for
-            # OpenAI and try with SiliconFlow -- if the response lacks word-level
-            # timestamps we fall back to segment-level parsing.
-            if provider == "OpenAI":
-                data["timestamp_granularities[]"] = "word"
 
             logger.info(
                 f"Calling {provider} API: url={api_url}, model={model}"
@@ -153,36 +277,49 @@ def _transcribe_whisper_api(
             )
 
         resp_data = response.json()
-        logger.info(f"{provider} API response keys: {list(resp_data.keys())}")
+        logger.info(
+            f"{provider} API response keys: {list(resp_data.keys())}, "
+            f"text length: {len(resp_data.get('text', ''))}"
+        )
 
-        # Try word-level timestamps first (OpenAI format)
+        # Strategy 1: Word-level timestamps (best quality, OpenAI whisper-1)
         words = resp_data.get("words", [])
         if words:
             segments = _parse_word_level(words)
             logger.info(
-                f"{provider} transcription: {len(segments)} word-level segments"
+                f"{provider}: {len(segments)} word-level segments (best quality)"
             )
             return segments
 
-        # Fall back to segment-level timestamps (common in SiliconFlow responses)
+        # Strategy 2: Segment-level timestamps (TeleSpeechASR, local whisper)
+        # Split segment text into Chinese words for better granularity
         api_segments = resp_data.get("segments", [])
         if api_segments:
             segments = _parse_segment_level(api_segments)
             logger.info(
-                f"{provider} transcription: {len(segments)} segments from segment-level data"
+                f"{provider}: {len(segments)} word segments from "
+                f"{len(api_segments)} API segments (word-tokenized)"
             )
+            # Log a sample for debugging
+            if segments:
+                sample = segments[:5]
+                logger.info(
+                    f"  Sample: {[(s['text'], s['start_ms'], s['end_ms']) for s in sample]}"
+                )
             return segments
 
-        # Last resort: just use the full text with estimated timestamps
+        # Strategy 3: Text-only fallback (SenseVoiceSmall)
         full_text = resp_data.get("text", "")
         if full_text:
             logger.warning(
-                f"{provider} returned text only (no timestamps), synthesizing segments"
+                f"{provider} returned text only (no timestamps). "
+                f"Consider switching to TeleAI/TeleSpeechASR for timestamp support. "
+                f"Synthesizing segments from text."
             )
             duration_ms = _get_duration_ms(video_path)
             segments = _synthesize_segments_from_text(full_text, duration_ms)
             logger.info(
-                f"{provider} transcription: {len(segments)} synthesized segments"
+                f"{provider}: {len(segments)} synthesized segments (low quality)"
             )
             return segments
 
@@ -198,12 +335,19 @@ def _transcribe_whisper_api(
 
 
 def _parse_word_level(words: list) -> List[WordSegment]:
-    """Parse OpenAI-style word-level timestamp data."""
+    """Parse OpenAI-style word-level timestamp data.
+
+    OpenAI whisper-1 with timestamp_granularities[]=word returns:
+        {"words": [{"word": "hello", "start": 0.0, "end": 0.5}, ...]}
+    """
     segments: List[WordSegment] = []
     for w in words:
+        text = w.get("word", "").strip()
+        if not text:
+            continue
         segments.append(
             WordSegment(
-                text=w.get("word", ""),
+                text=text,
                 start_ms=int(w.get("start", 0) * 1000),
                 end_ms=int(w.get("end", 0) * 1000),
                 confidence=round(w.get("confidence", 0.9), 3),
@@ -213,13 +357,19 @@ def _parse_word_level(words: list) -> List[WordSegment]:
 
 
 def _parse_segment_level(api_segments: list) -> List[WordSegment]:
-    """Parse segment-level timestamp data and split into character-level segments.
+    """Parse segment-level timestamps and split into word-level units.
 
-    SiliconFlow and some Whisper implementations return segments like:
-    [{"start": 0.0, "end": 2.5, "text": "..."}]
+    SiliconFlow TeleSpeechASR and similar models return segments like:
+        [{"start": 0.0, "end": 2.5, "text": "大家好今天我们来聊一聊"}]
 
-    We split segment text into individual characters (for Chinese) or words
-    (for other languages) and distribute timestamps evenly.
+    Instead of the old approach (splitting by individual character and
+    distributing time evenly), we now:
+    1. Tokenize the text into meaningful Chinese word units (2-4 chars)
+    2. Distribute time proportionally to word length
+    3. This gives much better timestamps for stutter detection and subtitles
+
+    If a segment contains only a single short word, it is kept as-is with
+    the segment's original timestamps -- this is the best case.
     """
     segments: List[WordSegment] = []
 
@@ -232,69 +382,110 @@ def _parse_segment_level(api_segments: list) -> List[WordSegment]:
         end_s = seg.get("end", 0.0)
         confidence = seg.get("confidence", seg.get("avg_logprob", 0.0))
 
-        # Normalize confidence: avg_logprob is typically negative (-0.x),
-        # convert to 0..1 range
+        # Normalize confidence
+        if confidence is None:
+            confidence = 0.9
         if confidence < 0:
-            # log prob to probability: roughly exp(logprob)
             confidence = min(1.0, max(0.0, math.exp(confidence)))
-
-        # If confidence is missing or zero, default to 0.9
         if confidence <= 0:
             confidence = 0.9
 
         start_ms = int(start_s * 1000)
         end_ms = int(end_s * 1000)
-        total_ms = end_ms - start_ms
+        total_ms = max(1, end_ms - start_ms)
 
-        # Split Chinese text into individual characters for word-level granularity
-        # For short segments, keep as-is
-        chars = list(text)
-        if len(chars) == 0:
+        # Tokenize into Chinese words
+        words = _segment_chinese_text(text)
+        if not words:
             continue
 
-        char_duration = max(1, total_ms // len(chars))
-
-        for i, char in enumerate(chars):
-            if char.strip() == "":
-                continue
-            c_start = start_ms + i * char_duration
-            c_end = min(c_start + char_duration, end_ms)
+        # If the segment is already a single word, use exact timestamps
+        if len(words) == 1:
             segments.append(
                 WordSegment(
-                    text=char,
-                    start_ms=c_start,
-                    end_ms=c_end,
+                    text=words[0],
+                    start_ms=start_ms,
+                    end_ms=end_ms,
                     confidence=round(confidence, 3),
                 )
             )
+            continue
+
+        # Distribute time proportionally to character count of each word.
+        # Chinese words with more characters typically take longer to speak.
+        total_chars = sum(len(w) for w in words)
+        if total_chars == 0:
+            continue
+
+        current_ms = start_ms
+        for i, word in enumerate(words):
+            # Proportional duration based on character count
+            word_chars = len(word)
+            word_duration = int(total_ms * word_chars / total_chars)
+
+            # Ensure minimum duration of 50ms per word
+            word_duration = max(50, word_duration)
+
+            w_start = current_ms
+            w_end = min(w_start + word_duration, end_ms)
+
+            # Last word gets the remaining time to avoid rounding gaps
+            if i == len(words) - 1:
+                w_end = end_ms
+
+            segments.append(
+                WordSegment(
+                    text=word,
+                    start_ms=w_start,
+                    end_ms=w_end,
+                    confidence=round(confidence, 3),
+                )
+            )
+            current_ms = w_end
 
     return segments
 
 
 def _synthesize_segments_from_text(text: str, duration_ms: int) -> List[WordSegment]:
-    """Create synthetic segments from plain text when no timestamps are available."""
+    """Create synthetic segments from plain text when no timestamps are available.
+
+    Uses word-level tokenization instead of character-level for better grouping.
+    """
     if duration_ms <= 0:
         duration_ms = 60000
 
-    chars = [c for c in text if c.strip()]
-    if not chars:
+    words = _segment_chinese_text(text)
+    if not words:
         return []
 
-    char_duration = max(1, duration_ms // (len(chars) + 1))
+    # Reserve 200ms margin at start and end
+    usable_ms = duration_ms - 400
+    if usable_ms <= 0:
+        usable_ms = duration_ms
+
+    total_chars = sum(len(w) for w in words)
+    if total_chars == 0:
+        return []
+
     segments: List[WordSegment] = []
     current_ms = 200
 
-    for char in chars:
+    for i, word in enumerate(words):
+        word_chars = len(word)
+        word_duration = int(usable_ms * word_chars / total_chars)
+        word_duration = max(80, word_duration)
+
         start_ms = current_ms
-        end_ms = start_ms + char_duration
+        end_ms = start_ms + word_duration
         if end_ms > duration_ms - 200:
             break
+
         segments.append(
             WordSegment(
-                text=char,
+                text=word,
                 start_ms=start_ms,
                 end_ms=end_ms,
-                confidence=0.85,
+                confidence=0.5,  # low confidence for synthesized timestamps
             )
         )
         current_ms = end_ms
