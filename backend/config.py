@@ -75,6 +75,11 @@ class Settings(BaseSettings):
     # --- OpenAI / Whisper API ---
     OPENAI_API_KEY: str = ""
 
+    # --- SiliconFlow API (OpenAI-compatible, preferred for Whisper) ---
+    SILICONFLOW_API_KEY: str = ""
+    SILICONFLOW_WHISPER_MODEL: str = "FunAudioLLM/SenseVoiceSmall"
+    SILICONFLOW_API_BASE_URL: str = "https://api.siliconflow.cn/v1/audio/transcriptions"
+
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 
 

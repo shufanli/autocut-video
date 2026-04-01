@@ -1,15 +1,16 @@
-"""Stage 1 -- Speech-to-text using OpenAI Whisper API or mock fallback.
+"""Stage 1 -- Speech-to-text using SiliconFlow / OpenAI Whisper API or mock fallback.
 
 Output format: list of word-level segments:
     [{"text": "...", "start_ms": int, "end_ms": int, "confidence": float}, ...]
 
-Strategy:
-    1. If OPENAI_API_KEY is set, use the OpenAI API (whisper-1 model).
-    2. Otherwise, generate a mock transcript for development/testing.
+Strategy (priority order):
+    1. If SILICONFLOW_API_KEY is set, use SiliconFlow API (OpenAI-compatible).
+    2. If OPENAI_API_KEY is set, use the OpenAI API (whisper-1 model).
+    3. Otherwise, generate a mock transcript for development/testing.
 """
 
-import json
 import logging
+import math
 import os
 import subprocess
 from typing import List, TypedDict
@@ -27,20 +28,42 @@ class WordSegment(TypedDict):
 def transcribe_audio(
     video_path: str,
     openai_api_key: str = "",
+    siliconflow_api_key: str = "",
+    siliconflow_model: str = "FunAudioLLM/SenseVoiceSmall",
+    siliconflow_base_url: str = "https://api.siliconflow.cn/v1/audio/transcriptions",
 ) -> List[WordSegment]:
     """Transcribe a video/audio file to word-level segments.
 
     Args:
         video_path: Path to the video file (mp4, mov, webm).
-        openai_api_key: OpenAI API key. If empty, uses mock transcript.
+        openai_api_key: OpenAI API key. If empty, falls back to mock.
+        siliconflow_api_key: SiliconFlow API key. Takes priority over OpenAI.
+        siliconflow_model: Model name for SiliconFlow (e.g. FunAudioLLM/SenseVoiceSmall).
+        siliconflow_base_url: SiliconFlow transcription endpoint URL.
 
     Returns:
         List of WordSegment dicts with word-level timestamps.
     """
-    if openai_api_key:
-        return _transcribe_openai(video_path, openai_api_key)
+    if siliconflow_api_key:
+        logger.info("Using SiliconFlow API for transcription")
+        return _transcribe_whisper_api(
+            video_path,
+            api_key=siliconflow_api_key,
+            api_url=siliconflow_base_url,
+            model=siliconflow_model,
+            provider="SiliconFlow",
+        )
+    elif openai_api_key:
+        logger.info("Using OpenAI API for transcription")
+        return _transcribe_whisper_api(
+            video_path,
+            api_key=openai_api_key,
+            api_url="https://api.openai.com/v1/audio/transcriptions",
+            model="whisper-1",
+            provider="OpenAI",
+        )
     else:
-        logger.info("No OPENAI_API_KEY set, using mock transcript")
+        logger.info("No API key set, using mock transcript")
         return _transcribe_mock(video_path)
 
 
@@ -70,49 +93,101 @@ def _extract_audio(video_path: str) -> str:
     return audio_path
 
 
-def _transcribe_openai(video_path: str, api_key: str) -> List[WordSegment]:
-    """Transcribe using OpenAI Whisper API with word-level timestamps."""
+def _transcribe_whisper_api(
+    video_path: str,
+    api_key: str,
+    api_url: str,
+    model: str,
+    provider: str,
+) -> List[WordSegment]:
+    """Transcribe using an OpenAI-compatible Whisper API with word-level timestamps.
+
+    Works with both OpenAI and SiliconFlow APIs since SiliconFlow is OpenAI-compatible.
+
+    Args:
+        video_path: Path to the video file.
+        api_key: API key for authentication.
+        api_url: Full URL to the transcriptions endpoint.
+        model: Model name (e.g. 'whisper-1' for OpenAI, 'FunAudioLLM/SenseVoiceSmall' for SiliconFlow).
+        provider: Provider name for logging (e.g. 'OpenAI', 'SiliconFlow').
+    """
     import httpx
 
-    # Extract audio first (OpenAI accepts various formats, but WAV is safest)
+    # Extract audio first
     audio_path = _extract_audio(video_path)
 
     try:
-        # Use httpx to call OpenAI API directly (no openai SDK dependency)
         with open(audio_path, "rb") as audio_file:
+            # Build request data -- SiliconFlow accepts the same format as OpenAI
+            data = {
+                "model": model,
+                "response_format": "verbose_json",
+                "language": "zh",
+            }
+
+            # timestamp_granularities is supported by OpenAI; SiliconFlow may
+            # or may not support it depending on the model. We include it for
+            # OpenAI and try with SiliconFlow -- if the response lacks word-level
+            # timestamps we fall back to segment-level parsing.
+            if provider == "OpenAI":
+                data["timestamp_granularities[]"] = "word"
+
+            logger.info(
+                f"Calling {provider} API: url={api_url}, model={model}"
+            )
+
             response = httpx.post(
-                "https://api.openai.com/v1/audio/transcriptions",
+                api_url,
                 headers={"Authorization": f"Bearer {api_key}"},
                 files={"file": ("audio.wav", audio_file, "audio/wav")},
-                data={
-                    "model": "whisper-1",
-                    "response_format": "verbose_json",
-                    "timestamp_granularities[]": "word",
-                    "language": "zh",
-                },
+                data=data,
                 timeout=300.0,
             )
 
         if response.status_code != 200:
-            logger.error(f"OpenAI API error {response.status_code}: {response.text}")
-            raise RuntimeError(f"OpenAI Whisper API error: {response.status_code}")
-
-        data = response.json()
-        words = data.get("words", [])
-
-        segments: List[WordSegment] = []
-        for w in words:
-            segments.append(
-                WordSegment(
-                    text=w.get("word", ""),
-                    start_ms=int(w.get("start", 0) * 1000),
-                    end_ms=int(w.get("end", 0) * 1000),
-                    confidence=round(w.get("confidence", 0.9), 3),
-                )
+            logger.error(
+                f"{provider} API error {response.status_code}: {response.text}"
+            )
+            raise RuntimeError(
+                f"{provider} Whisper API error: {response.status_code} - {response.text[:500]}"
             )
 
-        logger.info(f"OpenAI transcription: {len(segments)} word segments")
-        return segments
+        resp_data = response.json()
+        logger.info(f"{provider} API response keys: {list(resp_data.keys())}")
+
+        # Try word-level timestamps first (OpenAI format)
+        words = resp_data.get("words", [])
+        if words:
+            segments = _parse_word_level(words)
+            logger.info(
+                f"{provider} transcription: {len(segments)} word-level segments"
+            )
+            return segments
+
+        # Fall back to segment-level timestamps (common in SiliconFlow responses)
+        api_segments = resp_data.get("segments", [])
+        if api_segments:
+            segments = _parse_segment_level(api_segments)
+            logger.info(
+                f"{provider} transcription: {len(segments)} segments from segment-level data"
+            )
+            return segments
+
+        # Last resort: just use the full text with estimated timestamps
+        full_text = resp_data.get("text", "")
+        if full_text:
+            logger.warning(
+                f"{provider} returned text only (no timestamps), synthesizing segments"
+            )
+            duration_ms = _get_duration_ms(video_path)
+            segments = _synthesize_segments_from_text(full_text, duration_ms)
+            logger.info(
+                f"{provider} transcription: {len(segments)} synthesized segments"
+            )
+            return segments
+
+        logger.error(f"{provider} returned empty response: {resp_data}")
+        raise RuntimeError(f"{provider} returned empty transcription result")
 
     finally:
         # Cleanup audio file
@@ -120,6 +195,111 @@ def _transcribe_openai(video_path: str, api_key: str) -> List[WordSegment]:
             os.remove(audio_path)
         except OSError:
             pass
+
+
+def _parse_word_level(words: list) -> List[WordSegment]:
+    """Parse OpenAI-style word-level timestamp data."""
+    segments: List[WordSegment] = []
+    for w in words:
+        segments.append(
+            WordSegment(
+                text=w.get("word", ""),
+                start_ms=int(w.get("start", 0) * 1000),
+                end_ms=int(w.get("end", 0) * 1000),
+                confidence=round(w.get("confidence", 0.9), 3),
+            )
+        )
+    return segments
+
+
+def _parse_segment_level(api_segments: list) -> List[WordSegment]:
+    """Parse segment-level timestamp data and split into character-level segments.
+
+    SiliconFlow and some Whisper implementations return segments like:
+    [{"start": 0.0, "end": 2.5, "text": "..."}]
+
+    We split segment text into individual characters (for Chinese) or words
+    (for other languages) and distribute timestamps evenly.
+    """
+    segments: List[WordSegment] = []
+
+    for seg in api_segments:
+        text = seg.get("text", "").strip()
+        if not text:
+            continue
+
+        start_s = seg.get("start", 0.0)
+        end_s = seg.get("end", 0.0)
+        confidence = seg.get("confidence", seg.get("avg_logprob", 0.0))
+
+        # Normalize confidence: avg_logprob is typically negative (-0.x),
+        # convert to 0..1 range
+        if confidence < 0:
+            # log prob to probability: roughly exp(logprob)
+            confidence = min(1.0, max(0.0, math.exp(confidence)))
+
+        # If confidence is missing or zero, default to 0.9
+        if confidence <= 0:
+            confidence = 0.9
+
+        start_ms = int(start_s * 1000)
+        end_ms = int(end_s * 1000)
+        total_ms = end_ms - start_ms
+
+        # Split Chinese text into individual characters for word-level granularity
+        # For short segments, keep as-is
+        chars = list(text)
+        if len(chars) == 0:
+            continue
+
+        char_duration = max(1, total_ms // len(chars))
+
+        for i, char in enumerate(chars):
+            if char.strip() == "":
+                continue
+            c_start = start_ms + i * char_duration
+            c_end = min(c_start + char_duration, end_ms)
+            segments.append(
+                WordSegment(
+                    text=char,
+                    start_ms=c_start,
+                    end_ms=c_end,
+                    confidence=round(confidence, 3),
+                )
+            )
+
+    return segments
+
+
+def _synthesize_segments_from_text(text: str, duration_ms: int) -> List[WordSegment]:
+    """Create synthetic segments from plain text when no timestamps are available."""
+    if duration_ms <= 0:
+        duration_ms = 60000
+
+    chars = [c for c in text if c.strip()]
+    if not chars:
+        return []
+
+    char_duration = max(1, duration_ms // (len(chars) + 1))
+    segments: List[WordSegment] = []
+    current_ms = 200
+
+    for char in chars:
+        start_ms = current_ms
+        end_ms = start_ms + char_duration
+        if end_ms > duration_ms - 200:
+            break
+        segments.append(
+            WordSegment(
+                text=char,
+                start_ms=start_ms,
+                end_ms=end_ms,
+                confidence=0.85,
+            )
+        )
+        current_ms = end_ms
+
+    return segments
 
 
 def _transcribe_mock(video_path: str) -> List[WordSegment]:

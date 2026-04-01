@@ -194,6 +194,9 @@ def _run_pipeline(task_id: str) -> None:
         words = transcribe_audio(
             merged_path,
             openai_api_key=settings.OPENAI_API_KEY,
+            siliconflow_api_key=settings.SILICONFLOW_API_KEY,
+            siliconflow_model=settings.SILICONFLOW_WHISPER_MODEL,
+            siliconflow_base_url=settings.SILICONFLOW_API_BASE_URL,
         )
 
         # Save transcription result
