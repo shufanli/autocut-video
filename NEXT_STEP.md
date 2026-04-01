@@ -17,6 +17,12 @@
 9. Sprint 9 -- 端到端集成测试
 
 ## 最近变更 (2026-04-01)
+- P1 Bug 修复: processing 页面轮询卡住不跳转到 result 页面
+  - 前端: fetchStatus 的 useCallback 依赖包含 router/showToast，导致每次 re-render 重建回调函数，useEffect 重建 interval，打断了 clearInterval + setTimeout 跳转逻辑
+  - 修复方案: router/showToast 改为 ref 访问，移出 useCallback 依赖；新增 redirectingRef 守卫，一旦检测到终态即永久停止轮询
+  - 后端: GET /api/tasks/{id}/status 缺少 completed 状态的处理分支，补充完整的 stage/progress 响应字段
+  - 已部署上线: https://autocut.allinai.asia
+
 - 语音识别质量优化：
   - 默认模型从 FunAudioLLM/SenseVoiceSmall 切换到 TeleAI/TeleSpeechASR
   - SenseVoiceSmall 只返回纯文本(无时间戳)，TeleSpeechASR 返回段落级时间戳
