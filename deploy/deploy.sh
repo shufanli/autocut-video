@@ -110,7 +110,7 @@ DEPLOY_DIR="/www/wwwroot/autocut-video"
 echo "  --- Python setup ---"
 # Determine best Python binary (>= 3.8)
 PYTHON_BIN=""
-for py in python3.12 python3.11 python3.10 python3.9; do
+for py in python3.12 python3.11 python3.10 python3.9 python3.8; do
     if command -v $py &>/dev/null; then
         PYTHON_BIN=$py
         break
