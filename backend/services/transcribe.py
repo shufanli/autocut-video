@@ -52,25 +52,42 @@ def _init_word_dict():
     global _CHINESE_WORD_DICT, _CHINESE_MAX_WORD_LEN
     words = [
         # 4-char common phrases
-        "也就是说",
+        "也就是说", "不知不觉", "了不起的", "越来越多",
         # 3-char fillers / common words
         "比如说", "也就是", "怎么说", "聊一聊", "想一想", "看一看", "说一说",
         "试一试", "等一下", "差不多", "不一定", "所以说", "对不对", "创作者",
-        "过程中",
-        # 2-char fillers / conjunctions / common words
+        "过程中", "不知道",
+        # 2-char words -- high frequency in spoken Chinese
+        # Fillers / conjunctions
         "那个", "就是", "然后", "因为", "所以", "但是", "不过", "或者",
         "可以", "这个", "那么", "什么", "怎么", "如果", "虽然", "已经",
         "可能", "应该", "其实", "本来", "确实", "大概", "一般", "特别",
         "非常", "真的", "简单", "复杂", "基本", "比较", "稍微",
+        # Pronouns
         "我们", "你们", "他们", "她们", "大家", "自己", "别人",
+        # Numbers / quantifiers
         "一个", "一些", "一起", "一样", "一直", "一定",
+        # Time
         "现在", "以前", "之后", "以后", "今天", "明天", "昨天",
+        # Domain words (video editing)
         "视频", "剪辑", "内容", "创作", "素材", "字幕", "口播",
         "录制", "处理", "自动", "口误", "工具", "帮助", "问题",
+        # Common verbs / nouns
         "时候", "地方", "开始", "结束", "继续", "需要", "觉得",
         "知道", "喜欢", "使用", "方法", "过程", "结果", "效果",
-        "大家", "大量", "关于", "话题", "很多", "每天", "难免",
+        "大量", "关于", "话题", "很多", "每天", "难免",
         "出现", "重复", "词语", "停顿", "开发", "这些",
+        "成功", "失败", "生活", "工作", "学习", "发展", "研究",
+        "经验", "技术", "能力", "机会", "选择", "感觉", "认为",
+        "以为", "觉得", "希望", "支持", "反正", "而且", "不是",
+        "没有", "不会", "不能", "不要", "还是", "只是", "只有",
+        "就是", "可是", "于是", "所有", "任何", "每个", "这样",
+        "那样", "怎样", "多少", "为什么", "哪里", "什么样",
+        "别的", "这种", "那种", "各种", "有时", "最后", "首先",
+        "同时", "当时", "平时", "及时", "随时",
+        "东西", "事情", "朋友", "世界", "社会", "国家",
+        "看到", "听到", "想到", "做到", "得到", "找到",
+        "这么", "那么", "怎么", "多么",
     ]
     _CHINESE_WORD_DICT = set(words)
     _CHINESE_MAX_WORD_LEN = max(len(w) for w in words) if words else 1
@@ -123,8 +140,8 @@ def _segment_chinese_text(text: str) -> List[str]:
                 tokens.append(m.group())
                 i = m.end()
             else:
-                # Single non-CJK char (punctuation etc)
-                tokens.append(char)
+                # Skip punctuation -- it should not be a separate word segment.
+                # Chinese and ASCII punctuation: ，。！？、；：""''（）【】…—·,.!?;:
                 i += 1
             continue
 
