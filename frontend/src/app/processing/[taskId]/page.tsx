@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import { useRouter, useParams } from "next/navigation";
+import { useRouter, useParams, useSearchParams } from "next/navigation";
 import { Loader2, XCircle, RotateCcw } from "lucide-react";
 import { AuthGuard } from "@/components/auth-guard";
 import { ProgressSteps, StageInfo } from "@/components/progress-steps";
@@ -28,7 +28,9 @@ interface TaskStatus {
 export default function ProcessingPage() {
   const router = useRouter();
   const params = useParams();
+  const searchParams = useSearchParams();
   const taskId = params.taskId as string;
+  const isRenderMode = searchParams.get("mode") === "render";
   const { token } = useAuth();
   const { showToast } = useToast();
 
@@ -36,6 +38,10 @@ export default function ProcessingPage() {
   const [isTimedOut, setIsTimedOut] = useState(false);
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
   const [isRetrying, setIsRetrying] = useState(false);
+
+  // Track if we've ever seen "rendering" status during this page session.
+  // Initialize from URL param so we show the correct UI before the first poll.
+  const sawRenderingRef = useRef(isRenderMode);
 
   const startTimeRef = useRef<number>(Date.now());
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -60,6 +66,11 @@ export default function ProcessingPage() {
 
       const data: TaskStatus = await res.json();
       setStatus(data);
+
+      // Track if we've ever seen rendering status
+      if (data.status === "rendering") {
+        sawRenderingRef.current = true;
+      }
 
       // Check for completion -- redirect to preview (only from initial processing)
       if (data.status === "preview") {
@@ -195,6 +206,8 @@ export default function ProcessingPage() {
   const isFailed = status?.status === "failed";
   const isComplete = status?.status === "preview" || status?.status === "completed";
   const isRendering = status?.status === "rendering";
+  // "wasRendering" is true if we ever saw rendering status OR the completed status came from a render
+  const wasRendering = sawRenderingRef.current || isRendering;
 
   return (
     <AuthGuard>
@@ -208,14 +221,14 @@ export default function ProcessingPage() {
                 : isFailed
                 ? (status?.error_message?.includes("渲染") ? "渲染失败" : "处理失败")
                 : isComplete
-                ? (isRendering ? "渲染完成" : "处理完成")
-                : isRendering
+                ? (wasRendering ? "渲染完成" : "处理完成")
+                : (isRendering || wasRendering)
                 ? "正在渲染您的视频"
                 : "正在处理您的视频"}
             </h1>
             {!isTimedOut && !isFailed && !isComplete && (
               <p className="text-sm text-text-secondary mt-2">
-                {isRendering
+                {(isRendering || wasRendering)
                   ? "正在根据您的编辑生成最终视频，请耐心等待"
                   : "AI 正在分析和处理您的视频，请耐心等待"}
               </p>
@@ -310,8 +323,8 @@ export default function ProcessingPage() {
               </div>
             )}
 
-            {/* Normal processing state (or complete) */}
-            {!isTimedOut && !isFailed && !isRendering && (
+            {/* Normal processing state (or complete) -- show when NOT in render mode */}
+            {!isTimedOut && !isFailed && !isRendering && !wasRendering && (
               <>
                 <ProgressSteps
                   stages={stages}
@@ -354,7 +367,7 @@ export default function ProcessingPage() {
             )}
 
             {/* Rendering state -- single progress bar */}
-            {!isTimedOut && !isFailed && isRendering && (
+            {!isTimedOut && !isFailed && !isComplete && (isRendering || wasRendering) && (
               <div className="py-6">
                 <div className="text-center mb-6">
                   <Loader2 className="w-12 h-12 text-primary animate-spin mx-auto mb-4" />

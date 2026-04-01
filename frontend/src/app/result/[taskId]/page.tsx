@@ -446,16 +446,18 @@ export default function ResultPage() {
                 controls
                 preload="metadata"
                 playsInline
-                src={`/api/tasks/${taskId}/stream`}
+                src={token ? `/api/tasks/${taskId}/stream?token=${encodeURIComponent(token)}` : undefined}
                 crossOrigin="anonymous"
               >
-                <track
-                  kind="subtitles"
-                  src={`/api/tasks/${taskId}/subtitles.vtt`}
-                  srcLang="zh"
-                  label="中文字幕"
-                  default
-                />
+                {token && (
+                  <track
+                    kind="subtitles"
+                    src={`/api/tasks/${taskId}/subtitles.vtt?token=${encodeURIComponent(token)}`}
+                    srcLang="zh"
+                    label="中文字幕"
+                    default
+                  />
+                )}
                 <p className="text-white text-center p-4">
                   您的浏览器不支持视频播放
                 </p>

@@ -134,12 +134,29 @@ def decode_jwt(token: str) -> Optional[dict]:
 # Dependency: get current user from Authorization header
 # ---------------------------------------------------------------------------
 
+def _extract_token(request: Request) -> Optional[str]:
+    """Extract JWT token from Authorization header or ?token= query parameter.
+
+    Priority: Authorization header > query parameter.
+    The query parameter is needed for HTML5 <video> and <track> elements
+    which cannot send custom headers.
+    """
+    # Try Authorization header first
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        return auth_header[7:]
+    # Fall back to query parameter
+    token = request.query_params.get("token")
+    if token:
+        return token
+    return None
+
+
 def get_current_user_optional(request: Request, db: Session = Depends(get_db)) -> Optional[User]:
     """Return the current user if a valid token is present, else None."""
-    auth_header = request.headers.get("Authorization", "")
-    if not auth_header.startswith("Bearer "):
+    token = _extract_token(request)
+    if not token:
         return None
-    token = auth_header[7:]
     payload = decode_jwt(token)
     if not payload:
         return None

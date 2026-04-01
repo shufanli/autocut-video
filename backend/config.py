@@ -42,13 +42,13 @@ class Settings(BaseSettings):
     LOGIN_CODE_EXPIRE_SEC: int = 300
     LOGIN_CODE_COOLDOWN_SEC: int = 60
     LOGIN_MAX_FAIL_ATTEMPTS: int = 3
-    LOGIN_LOCKOUT_MIN: int = 5
+    LOGIN_LOCKOUT_MIN: int = 2
     LLM_PROVIDER: str = "claude"
     LLM_MODEL: str = "claude-haiku"
     LLM_TIMEOUT_SEC: int = 30
     WHISPER_MODEL: str = "large-v3"
     DEVICE_FINGERPRINT_MAX_ACCOUNTS: int = 2
-    IP_SMS_HOURLY_LIMIT: int = 10
+    IP_SMS_HOURLY_LIMIT: int = 50
     PHONE_SMS_DAILY_LIMIT: int = 5
     CONTENT_MODERATION_PROVIDER: str = "aliyun"
 

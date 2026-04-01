@@ -232,7 +232,7 @@ export default function PreviewPage() {
     }
 
     // Navigate to processing page — task is now in "rendering" status
-    router.push(`/processing/${taskId}`);
+    router.push(`/processing/${taskId}?mode=render`);
   }, [saveAdjustments, router, taskId, token, showToast]);
 
   // Reprocess: go back to upload page
