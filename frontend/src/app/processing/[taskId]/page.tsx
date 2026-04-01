@@ -46,8 +46,33 @@ export default function ProcessingPage() {
   const startTimeRef = useRef<number>(Date.now());
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Poll for status updates
+  // Use refs for router/showToast to keep fetchStatus stable across renders.
+  // This prevents useEffect from recreating the interval when these change
+  // reference (which can happen on re-renders in Next.js App Router),
+  // which was causing the redirect-on-complete logic to be interrupted.
+  const routerRef = useRef(router);
+  routerRef.current = router;
+  const showToastRef = useRef(showToast);
+  showToastRef.current = showToast;
+
+  // Guard: once we detect a terminal state and schedule a redirect,
+  // stop all further polling immediately so no new intervals can restart it.
+  const redirectingRef = useRef(false);
+
+  // Helper: stop polling definitively
+  const stopPolling = useCallback(() => {
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+  }, []);
+
+  // Poll for status updates.
+  // Only token and taskId are true dependencies; router and showToast are
+  // accessed via stable refs so they do not cause fetchStatus to be recreated.
   const fetchStatus = useCallback(async () => {
+    // If we already detected a terminal state, do nothing
+    if (redirectingRef.current) return;
     if (!token || !taskId) return;
 
     try {
@@ -57,8 +82,10 @@ export default function ProcessingPage() {
 
       if (!res.ok) {
         if (res.status === 404) {
-          showToast("任务不存在", "error");
-          router.push("/upload");
+          redirectingRef.current = true;
+          stopPolling();
+          showToastRef.current("任务不存在", "error");
+          routerRef.current.push("/upload");
           return;
         }
         return;
@@ -74,60 +101,58 @@ export default function ProcessingPage() {
 
       // Check for completion -- redirect to preview (only from initial processing)
       if (data.status === "preview") {
-        if (pollRef.current) {
-          clearInterval(pollRef.current);
-          pollRef.current = null;
-        }
+        redirectingRef.current = true;
+        stopPolling();
         // Brief delay to show "complete" state before redirect
         setTimeout(() => {
-          router.push(`/preview/${taskId}`);
+          routerRef.current.push(`/preview/${taskId}`);
         }, 1500);
         return;
       }
 
       // Rendering complete -- redirect to result/download page
       if (data.status === "completed") {
-        if (pollRef.current) {
-          clearInterval(pollRef.current);
-          pollRef.current = null;
-        }
+        redirectingRef.current = true;
+        stopPolling();
         setTimeout(() => {
-          router.push(`/result/${taskId}`);
+          routerRef.current.push(`/result/${taskId}`);
         }, 1500);
         return;
       }
 
       // Check for failure
       if (data.status === "failed") {
-        if (pollRef.current) {
-          clearInterval(pollRef.current);
-          pollRef.current = null;
-        }
+        redirectingRef.current = true;
+        stopPolling();
         return;
       }
 
       // Check timeout
       if (Date.now() - startTimeRef.current > TIMEOUT_MS) {
         setIsTimedOut(true);
-        if (pollRef.current) {
-          clearInterval(pollRef.current);
-          pollRef.current = null;
-        }
+        redirectingRef.current = true;
+        stopPolling();
         return;
       }
     } catch {
       // Network error -- keep polling
     }
-  }, [token, taskId, router, showToast]);
+  }, [token, taskId, stopPolling]);
 
-  // Start polling on mount
+  // Start polling on mount.
+  // Because fetchStatus now only depends on token/taskId (stable values),
+  // this effect will not re-run spuriously and recreate the interval.
   useEffect(() => {
+    // Reset redirect guard when deps change (e.g. navigating to a new task)
+    redirectingRef.current = false;
+
     fetchStatus(); // Initial fetch
     pollRef.current = setInterval(fetchStatus, POLL_INTERVAL_MS);
 
     return () => {
       if (pollRef.current) {
         clearInterval(pollRef.current);
+        pollRef.current = null;
       }
     };
   }, [fetchStatus]);
@@ -159,21 +184,22 @@ export default function ProcessingPage() {
 
       if (res.ok) {
         startTimeRef.current = Date.now();
+        redirectingRef.current = false; // Allow polling again after retry
         setStatus(null);
         // Restart polling
         if (pollRef.current) clearInterval(pollRef.current);
         pollRef.current = setInterval(fetchStatus, POLL_INTERVAL_MS);
-        showToast(wasRendering ? "重新渲染已开始" : "已重新开始处理", "success");
+        showToastRef.current(wasRendering ? "重新渲染已开始" : "已重新开始处理", "success");
       } else {
         const data = await res.json().catch(() => ({}));
-        showToast(data.detail || "重试失败", "error");
+        showToastRef.current(data.detail || "重试失败", "error");
       }
     } catch {
-      showToast("网络错误，请稍后重试", "error");
+      showToastRef.current("网络错误，请稍后重试", "error");
     } finally {
       setIsRetrying(false);
     }
-  }, [token, taskId, fetchStatus, showToast, status]);
+  }, [token, taskId, fetchStatus, status]);
 
   // Handle cancel
   const handleCancelConfirm = useCallback(() => {

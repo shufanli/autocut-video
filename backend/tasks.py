@@ -432,6 +432,21 @@ def get_task_status(
             "error": render_error,
         })
 
+    elif task.status == "completed":
+        # Rendering finished -- return completed state with full progress info
+        response.update({
+            "stage": 1,
+            "stage_name": "完成",
+            "stage_key": "done",
+            "progress": 100,
+            "estimated_seconds": 0,
+            "total_stages": 1,
+            "stages": [
+                {"key": "rendering", "name": "渲染中", "status": "completed"},
+            ],
+            "error": "",
+        })
+
     elif task.status == "failed":
         response.update({
             "stage": -1,
